@@ -1,0 +1,9 @@
+SignupID,TripID,TripName,Season,Name,Phone,DrivingCapacity,Questions,PaymentReceived,SignupDate
+SIGNUP-001,TRIP-005,Mammoth Season Opener 2026,2026-2027,Jordan Taylor,555-0101,Can drive (3 passengers + gear),"Leaving Friday 2pm from campus, roof rack fits 4 snowboards",True,2026-09-10
+SIGNUP-002,TRIP-005,Mammoth Season Opener 2026,2026-2027,Alex Morgan,555-0102,Can drive (4+ passengers + gear),Subaru Outback with Thule box,True,2026-09-10
+SIGNUP-003,TRIP-005,Mammoth Season Opener 2026,2026-2027,Casey Chen,555-0103,Can drive (2 passengers + gear),Truck with bed cover,False,2026-09-11
+SIGNUP-004,TRIP-005,Mammoth Season Opener 2026,2026-2027,Morgan Reed,555-0104,Cannot drive,Vegetarian meal request,True,2026-09-11
+SIGNUP-005,TRIP-005,Mammoth Season Opener 2026,2026-2027,Riley Davis,555-0105,Cannot drive,Need to rent demo skis,False,2026-09-12
+SIGNUP-006,TRIP-005,Mammoth Season Opener 2026,2026-2027,Taylor Brooks,555-0106,Cannot drive,,True,2026-09-12
+SIGNUP-007,TRIP-005,Mammoth Season Opener 2026,2026-2027,Sam Patel,555-0107,Can drive (1 passenger + gear),Leaving Friday 4pm,False,2026-09-13
+SIGNUP-008,TRIP-005,Mammoth Season Opener 2026,2026-2027,Jamie Kim,555-0108,Cannot drive,First time on a team trip!,False,2026-09-13
