@@ -12,10 +12,14 @@ import urllib.parse
 import pandas as pd
 import numpy as np
 from datetime import datetime, date, timedelta, timezone
+import config
 from config import (
     CURRENT_SEASON, INITIAL_SHIRT_INVENTORY, INITIAL_SWEATSHIRT_INVENTORY,
-    VALID_SIZES, OFFICERS, DEMO_OFFICERS
+    VALID_SIZES, OFFICERS, DEMO_OFFICERS, INCOME_CATEGORIES
 )
+
+DEFAULT_LEDGER_SHEET_URL = getattr(config, "DEFAULT_LEDGER_SHEET_URL", "")
+LEDGER_WEBHOOK_URL = getattr(config, "LEDGER_WEBHOOK_URL", "")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 DEMO_DATA_DIR = os.path.join(DATA_DIR, "demo")
@@ -619,10 +623,260 @@ def ensure_data_initialized():
 
 # --- LEDGER OPERATIONS (MULTI-SEASON) ---
 
+def trigger_ledger_webhook(action: str, transaction_data: dict):
+    """Optionally notify a Google Apps Script webhook to mirror ledger additions to Google Sheet."""
+    if not LEDGER_WEBHOOK_URL:
+        return
+    try:
+        import json
+        import urllib.request
+        payload = json.dumps({"action": action, "data": transaction_data}).encode("utf-8")
+        req = urllib.request.Request(
+            LEDGER_WEBHOOK_URL,
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "SkiTeamDash/1.0"},
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception as e:
+        print(f"Ledger webhook notification skipped or failed: {e}")
+
+
+def import_ledger_dataframe(df_source: pd.DataFrame, mode: str = "replace", is_officer: bool = False) -> tuple[bool, str, int]:
+    """
+    Intelligently map, clean, and import an external DataFrame (from CSV or Google Sheet)
+    into the master ledger (multi-season).
+    Modes:
+      - 'replace': Replaces current master ledger records.
+      - 'append': Appends new transactions, de-duplicating against existing entries.
+    """
+    try:
+        if df_source is None or df_source.empty:
+            return False, "Import data is empty or contains no records.", 0
+
+        df = df_source.copy()
+        norm_cols = {c: re.sub(r"[^a-zA-Z0-9]", "", str(c)).lower() for c in df.columns}
+
+        col_map = {}
+        for orig_col, norm in norm_cols.items():
+            if norm in ["date", "transactiondate", "transdate", "txdate", "timestamp"]:
+                if "Date" not in col_map:
+                    col_map["Date"] = orig_col
+            elif norm in ["entity", "vendor", "payer", "payee", "merchant", "person", "recipient", "target", "name"]:
+                if "Entity" not in col_map:
+                    col_map["Entity"] = orig_col
+            elif norm in ["amount", "cost", "total", "amt", "value", "price", "usd", "dollars"]:
+                if "Amount" not in col_map:
+                    col_map["Amount"] = orig_col
+            elif norm in ["category", "cat", "budgetcategory", "item"]:
+                if "Category" not in col_map:
+                    col_map["Category"] = orig_col
+            elif norm in ["notes", "note", "description", "memo", "details", "comment", "comments", "desc"]:
+                if "Notes" not in col_map:
+                    col_map["Notes"] = orig_col
+            elif norm in ["type", "transtype", "transactiontype", "incomeexpense", "flow", "classification"]:
+                if "Type" not in col_map:
+                    col_map["Type"] = orig_col
+            elif norm in ["season", "academicyear", "year", "schoolyear"]:
+                if "Season" not in col_map:
+                    col_map["Season"] = orig_col
+            elif norm in ["loggedby", "officer", "author", "enteredby", "submittedby", "admin"]:
+                if "LoggedBy" not in col_map:
+                    col_map["LoggedBy"] = orig_col
+
+        if "Amount" not in col_map and "Entity" not in col_map:
+            return False, "Could not identify required ledger columns (Date, Entity, Amount).", 0
+
+        std_rows = []
+        for _, row in df.iterrows():
+            # Date
+            raw_date = str(row[col_map["Date"]]).strip() if "Date" in col_map and pd.notna(row[col_map["Date"]]) else ""
+            if raw_date and raw_date.lower() not in ["nan", "none", "nat"]:
+                try:
+                    dt = pd.to_datetime(raw_date, errors="coerce")
+                    if pd.notna(dt):
+                        date_str = dt.strftime("%m-%d-%Y")
+                    else:
+                        date_str = raw_date
+                except Exception:
+                    date_str = raw_date
+            else:
+                date_str = date.today().strftime("%m-%d-%Y")
+
+            # Entity
+            entity_val = str(row[col_map["Entity"]]).strip() if "Entity" in col_map and pd.notna(row[col_map["Entity"]]) else ""
+            if entity_val.lower() in ["nan", "none"]:
+                entity_val = ""
+
+            # Amount
+            amt_raw = row[col_map["Amount"]] if "Amount" in col_map and pd.notna(row[col_map["Amount"]]) else 0.0
+            is_negative = False
+            if isinstance(amt_raw, str):
+                cleaned_amt = amt_raw.replace("$", "").replace(",", "").strip()
+                if cleaned_amt.startswith("(") and cleaned_amt.endswith(")"):
+                    is_negative = True
+                    cleaned_amt = cleaned_amt[1:-1].strip()
+                try:
+                    amount_val = float(cleaned_amt)
+                    if is_negative:
+                        amount_val = -abs(amount_val)
+                except Exception:
+                    amount_val = 0.0
+            else:
+                try:
+                    amount_val = float(amt_raw)
+                except Exception:
+                    amount_val = 0.0
+
+            # Type
+            raw_type = str(row[col_map["Type"]]).strip() if "Type" in col_map and pd.notna(row[col_map["Type"]]) else ""
+            if raw_type.lower() in ["income", "revenue", "inflow", "credit", "deposit"]:
+                trans_type = "Income"
+            elif raw_type.lower() in ["expense", "disbursement", "outflow", "debit", "cost"]:
+                trans_type = "Expense"
+            else:
+                if amount_val < 0:
+                    trans_type = "Expense"
+                elif "Category" in col_map and str(row[col_map["Category"]]).strip() in INCOME_CATEGORIES:
+                    trans_type = "Income"
+                else:
+                    trans_type = "Expense"
+
+            amount_val = abs(amount_val)
+
+            # Category
+            cat_val = str(row[col_map["Category"]]).strip() if "Category" in col_map and pd.notna(row[col_map["Category"]]) else "Other"
+            if cat_val.upper() == "IKON":
+                cat_val = "Ikon"
+            elif cat_val.lower() in ["nan", "none", ""]:
+                cat_val = "Other"
+
+            # Notes
+            notes_val = str(row[col_map["Notes"]]).strip() if "Notes" in col_map and pd.notna(row[col_map["Notes"]]) else ""
+            if notes_val.lower() in ["nan", "none"]:
+                notes_val = ""
+
+            # Season
+            season_val = str(row[col_map["Season"]]).strip() if "Season" in col_map and pd.notna(row[col_map["Season"]]) else ""
+            if season_val.lower() in ["nan", "none", ""]:
+                try:
+                    dt_check = pd.to_datetime(date_str, errors="coerce")
+                    if pd.notna(dt_check):
+                        y = dt_check.year
+                        m = dt_check.month
+                        season_val = f"{y}-{y+1}" if m >= 8 else f"{y-1}-{y}"
+                    else:
+                        season_val = CURRENT_SEASON
+                except Exception:
+                    season_val = CURRENT_SEASON
+
+            # LoggedBy
+            logged_val = str(row[col_map["LoggedBy"]]).strip() if "LoggedBy" in col_map and pd.notna(row[col_map["LoggedBy"]]) else ""
+            if logged_val.lower() in ["nan", "none"]:
+                logged_val = ""
+
+            if not entity_val and amount_val == 0.0:
+                continue
+
+            std_rows.append({
+                "Date": date_str,
+                "Entity": entity_val,
+                "Amount": amount_val,
+                "Category": cat_val,
+                "Notes": notes_val,
+                "Type": trans_type,
+                "Season": season_val,
+                "LoggedBy": logged_val
+            })
+
+        if not std_rows:
+            return False, "No valid transaction rows could be parsed from the provided data.", 0
+
+        new_df = pd.DataFrame(std_rows)
+
+        if mode == "append":
+            current_df = load_ledger(season=None, is_officer=is_officer)
+            combined_df = pd.concat([new_df, current_df], ignore_index=True)
+            combined_df = combined_df.drop_duplicates(
+                subset=["Date", "Entity", "Amount", "Category", "Type", "Season", "Notes"],
+                keep="first"
+            ).reset_index(drop=True)
+            final_df = combined_df
+            added_count = len(final_df) - len(current_df)
+            msg = f"Appended {added_count} new transaction(s) into master ledger (total records: {len(final_df)})."
+        else:
+            final_df = new_df
+            msg = f"Loaded {len(final_df)} transaction(s) into master ledger across all seasons."
+
+        save_ledger(final_df, is_officer=is_officer)
+        return True, msg, len(final_df)
+    except Exception as e:
+        return False, f"Error processing ledger data: {e}", 0
+
+
+def sync_ledger_from_google_sheet(sheet_url: str, mode: str = "replace", is_officer: bool = False) -> tuple[bool, str, int]:
+    """Fetch a Google Sheet via public CSV export URL and sync into master ledger."""
+    clean_url = sheet_url.strip()
+    if not clean_url:
+        return False, "Google Sheet URL or ID is empty.", 0
+
+    gid_match = re.search(r"gid=([0-9]+)", clean_url)
+    gid_str = f"&gid={gid_match.group(1)}" if gid_match else ""
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", clean_url)
+    if match:
+        sheet_id = match.group(1)
+        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_str}"
+    elif clean_url.startswith("http"):
+        csv_url = clean_url
+    else:
+        csv_url = f"https://docs.google.com/spreadsheets/d/{clean_url}/export?format=csv{gid_str}"
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            csv_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        )
+        with urllib.request.urlopen(req, timeout=12) as response:
+            df_sheet = pd.read_csv(response)
+        return import_ledger_dataframe(df_sheet, mode=mode, is_officer=is_officer)
+    except Exception as e:
+        return False, f"Could not fetch Google Sheet. Verify link sharing ('Anyone with the link can view') or upload CSV manually. Details: {e}", 0
+
+
+def get_master_ledger_csv_bytes(is_officer: bool = False) -> bytes:
+    """Get raw UTF-8 CSV bytes of the master ledger across all seasons."""
+    df = load_ledger(season=None, is_officer=is_officer)
+    cols = ["Date", "Entity", "Amount", "Category", "Notes", "Type", "Season", "LoggedBy"]
+    export_df = df[[c for c in cols if c in df.columns]].copy()
+    return export_df.to_csv(index=False).encode("utf-8")
+
+
 def load_ledger(season: str = None, is_officer: bool = False) -> pd.DataFrame:
     """Load and normalize ledger data, optionally filtered by season."""
     ensure_data_initialized()
     target_file = get_ledger_file(is_officer)
+
+    # Automatically auto-sync from Google Sheet on cold boot / empty cloud instances
+    if is_officer and DEFAULT_LEDGER_SHEET_URL:
+        needs_auto_sync = False
+        if not os.path.exists(target_file) or os.path.getsize(target_file) == 0:
+            needs_auto_sync = True
+        else:
+            try:
+                check_df = pd.read_csv(target_file)
+                if check_df.empty or len(check_df) == 0:
+                    needs_auto_sync = True
+            except Exception:
+                needs_auto_sync = True
+
+        if needs_auto_sync:
+            try:
+                sync_ledger_from_google_sheet(DEFAULT_LEDGER_SHEET_URL, mode="replace", is_officer=True)
+            except Exception as sync_err:
+                print(f"Auto-sync from Google Sheet failed: {sync_err}")
+
     try:
         df = pd.read_csv(target_file)
         if "Season" not in df.columns:
@@ -651,7 +905,6 @@ def save_ledger(df: pd.DataFrame, is_officer: bool = False):
     cols = ["Date", "Entity", "Amount", "Category", "Notes", "Type", "Season", "LoggedBy"]
     save_df = df[[c for c in cols if c in df.columns]].copy()
     save_df.to_csv(get_ledger_file(is_officer), index=False)
-
 
 
 def save_edited_ledger(edited_df: pd.DataFrame, is_officer: bool = False) -> bool:
@@ -698,7 +951,7 @@ def add_transaction(date_str: str, entity: str, amount: float, category: str, no
     """Append a new transaction to the ledger with designated season."""
     try:
         df = load_ledger(season=None, is_officer=is_officer)
-        new_row = pd.DataFrame([{
+        new_tx = {
             "Date": date_str,
             "Entity": entity.strip(),
             "Amount": float(amount),
@@ -707,9 +960,12 @@ def add_transaction(date_str: str, entity: str, amount: float, category: str, no
             "Type": trans_type,
             "Season": season,
             "LoggedBy": logged_by.strip()
-        }])
+        }
+        new_row = pd.DataFrame([new_tx])
         df = pd.concat([new_row, df], ignore_index=True)
         save_ledger(df, is_officer=is_officer)
+        if is_officer and LEDGER_WEBHOOK_URL:
+            trigger_ledger_webhook("add", new_tx)
         return True
     except Exception as e:
         print(f"Error adding transaction: {e}")
@@ -1595,6 +1851,19 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
     except Exception as e:
         print(f"Error adding trip: {e}")
         return False
+
+
+def add_trip(name: str, destination: str, start_date: str, end_date: str, nights: int,
+             miles: float, attendees: int, vehicles: int, cabin: float, food: float,
+             tickets: float, gas: float, status: str = "Planning", notes: str = "",
+             season: str = CURRENT_SEASON, is_officer: bool = False, trip_type: str = "Recreational") -> bool:
+    """Compatibility wrapper for add_created_trip."""
+    return add_created_trip(
+        name=name, destination=destination, trip_type=trip_type, start_date=start_date,
+        end_date=end_date, nights=nights, miles=miles, attendees=attendees, vehicles=vehicles,
+        cabin=cabin, food=food, tickets=tickets, gas=gas, attendee_roster=[], status=status,
+        notes=notes, season=season, is_officer=is_officer
+    )
 
 
 def delete_trip(trip_id: str, is_officer: bool = False) -> bool:

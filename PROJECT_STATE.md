@@ -41,9 +41,10 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Recent transactions audit trail.
 - **General Ledger & Officer Entry** ([[modules/ledger.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/ledger.py)]):
   - View-only formatted transaction table for general club members.
-  - Officer interactive in-place editable grid powered by `st.data_editor` allowing direct updates to all fields (Date, Season, Type, Category, Amount, Description, Logged By, Receipt URL).
-  - Single transaction entry form with category selectors (including 'Ikon' for both Income and Expense flows) and receipt link attachments.
-  - Bulk CSV transaction upload with automatic column mapping.
+  - Officer interactive in-place editable grid powered by `st.data_editor` allowing direct updates to all fields (Date, Season, Type, Category, Amount, Description, Logged By).
+  - Single transaction entry form with category selectors and officer attribution.
+  - **Google Sheets Live Sync & CSV Ledger Backup**: Dedicated expander enabling officers to synchronize the master ledger directly with a private Google Sheet (`LEDGER_SHEET_URL`), import/restore CSV backups, or download the full master ledger across all seasons with 1 click.
+  - **Cold-Boot Cloud Persistence**: Automatically populates `data/ledger.csv` directly from `LEDGER_SHEET_URL` on Streamlit Community Cloud reboots if the container disk starts empty.
   - Record deletion utility with confirmation dialogs.
 - **Membership & Dues Tracker** ([[modules/registration.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/registration.py)]):
   - Member table with multi-parameter filtering: Search Roster (by Name, Email, Notes, Trips, Year, Ski/Board), Season, Dues Paid/Unpaid, Slack Status (`All`, `In Slack Only`, `Not in Slack`), Ski/Board (`All Disciplines`, `Ski`, `Board`, `Both`), Shirt Size, and Team Division.
@@ -97,8 +98,8 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
 
 ## Known Issues & Technical Debt
 
-- **Ephemeral Storage on Streamlit Cloud**:
-  - Local CSV files in `data/` persist between sessions locally, but Streamlit Community Cloud instances reboot on inactivity or deployment, reverting CSV modifications unless synced to GitHub or an external database (e.g., PostgreSQL, Supabase, Google Sheets).
+- **Ephemeral Storage on Streamlit Cloud & Persistent Google Sheets Architecture**:
+  - Local CSV files in `data/` persist between sessions on local machines, but Streamlit Community Cloud instances reboot periodically. To protect data privacy while guaranteeing persistence, the sensitive club records (Master Financial Ledger and Membership Roster) persist via private Google Sheets (`LEDGER_SHEET_URL` and `MEMBERSHIP_FORM_SHEET_URL`) configured through Streamlit Secrets, ensuring zero sensitive financial data is stored in the public GitHub repo.
 - **Streamlit Selectbox Native ReadOnly Gap**:
   - Streamlit currently lacks an official `read_only=True` parameter on `st.selectbox`. The app utilizes a client-side JavaScript injection (`streamlit.components.v1.html`) and `MutationObserver` alongside `filter_mode=None` to guarantee non-editable dropdown behavior.
 - **Single Passcode Authorization**:

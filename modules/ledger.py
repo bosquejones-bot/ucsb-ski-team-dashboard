@@ -7,8 +7,16 @@ CSV export, and an easy-to-use Officer Entry Form.
 import streamlit as st
 import pandas as pd
 from datetime import date
-from utils.data_manager import load_ledger, add_transaction, delete_transaction, save_edited_ledger, load_officers
-from config import INCOME_CATEGORIES, EXPENSE_CATEGORIES, ALL_CATEGORIES, CURRENT_SEASON, AVAILABLE_SEASONS
+from utils.data_manager import (
+    load_ledger, add_transaction, delete_transaction, save_edited_ledger, load_officers,
+    sync_ledger_from_google_sheet, import_ledger_dataframe, get_master_ledger_csv_bytes
+)
+import config
+from config import (
+    INCOME_CATEGORIES, EXPENSE_CATEGORIES, ALL_CATEGORIES, CURRENT_SEASON, AVAILABLE_SEASONS
+)
+
+DEFAULT_LEDGER_SHEET_URL = getattr(config, "DEFAULT_LEDGER_SHEET_URL", "")
 
 
 def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = False, can_edit: bool = None):
@@ -68,6 +76,102 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                             st.rerun()
                         else:
                             st.error("Failed to save transaction. Please try again.")
+
+    # --- GOOGLE SHEETS LIVE SYNC AND CSV BACKUP ---
+    with st.expander("Google Sheets Live Sync and CSV Ledger Backup", expanded=False):
+        if not is_officer:
+            st.info("Officer access required to synchronize Google Sheets or restore CSV backups. Enter the officer password in the sidebar to unlock.")
+        elif not can_edit:
+            st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to sync Google Sheets or restore CSV backups.")
+        else:
+            st.markdown(
+                "Keep your financial ledger securely synced with a private Google Sheet or import/export CSV backups. "
+                "No transaction data is stored in the public GitHub repository."
+            )
+            tab_sheet, tab_upload_csv, tab_backup = st.tabs([
+                "Sync via Google Sheet",
+                "Upload / Restore CSV",
+                "Export Master Ledger Backup"
+            ])
+
+            with tab_sheet:
+                st.caption(
+                    "Link your master financial Google Sheet. Ensure your sheet sharing is set to "
+                    "'Anyone with the link can view' so the cloud server can read records."
+                )
+                sheet_url_input = st.text_input(
+                    "Google Sheet URL or Spreadsheet ID",
+                    value=DEFAULT_LEDGER_SHEET_URL,
+                    placeholder="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit#gid=0",
+                    help="Configured securely via LEDGER_SHEET_URL in Streamlit secrets."
+                )
+                sync_mode = st.radio(
+                    "Sync Action",
+                    ["Replace Entire Ledger (Recommended for Master Google Sheet)", "Append New Transactions Only"],
+                    index=0,
+                    horizontal=True,
+                    key="sheet_sync_mode_radio"
+                )
+                mode_val = "replace" if "Replace" in sync_mode else "append"
+
+                if st.button("Sync Ledger from Google Sheet", use_container_width=True):
+                    if not sheet_url_input.strip():
+                        st.error("Please enter a valid Google Sheet URL or ID.")
+                    else:
+                        with st.spinner("Connecting to Google Sheet and synchronizing transactions..."):
+                            success, message, count = sync_ledger_from_google_sheet(
+                                sheet_url_input, mode=mode_val, is_officer=is_officer
+                            )
+                            if success:
+                                st.success(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
+
+            with tab_upload_csv:
+                st.caption("Upload a full ledger CSV or exported transactions file to restore records directly.")
+                uploaded_csv = st.file_uploader("Upload Ledger CSV File", type=["csv"], key="ledger_csv_uploader")
+                upload_mode = st.radio(
+                    "Import Action",
+                    ["Replace Entire Ledger", "Append New Transactions Only"],
+                    index=0,
+                    horizontal=True,
+                    key="csv_upload_mode_radio"
+                )
+                mode_upload_val = "replace" if "Replace" in upload_mode else "append"
+
+                if uploaded_csv is not None:
+                    if st.button("Import Uploaded CSV into Master Ledger", use_container_width=True):
+                        try:
+                            df_uploaded = pd.read_csv(uploaded_csv)
+                            with st.spinner("Processing and validating transactions..."):
+                                success, message, count = import_ledger_dataframe(
+                                    df_uploaded, mode=mode_upload_val, is_officer=is_officer
+                                )
+                                if success:
+                                    st.success(message)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+                        except Exception as e:
+                            st.error(f"Error reading uploaded CSV file: {e}")
+
+            with tab_backup:
+                st.markdown("**Download Complete Master Ledger (All Seasons)**")
+                st.caption(
+                    "Download the entire team financial ledger (including all historical and current season transactions) "
+                    "as a clean CSV. You can open this in Excel or upload it directly into Google Drive to create your master Google Sheet."
+                )
+                master_csv_bytes = get_master_ledger_csv_bytes(is_officer=is_officer)
+                total_master_rows = len(load_ledger(season=None, is_officer=is_officer))
+                st.download_button(
+                    label=f"Download Master Ledger CSV ({total_master_rows:,} Records)",
+                    data=master_csv_bytes,
+                    file_name=f"ucsb_ski_team_master_ledger_all_seasons_{date.today().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Export all records across all seasons to set up your Google Sheet or keep an offline backup."
+                )
 
     st.divider()
 
@@ -221,15 +325,28 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
     # Export & Management Tools
     col_dl, col_del = st.columns([3, 1])
     with col_dl:
-        export_cols = [c for c in filtered_df.columns if c not in ["Row", "Date_dt"]]
-        csv_data = filtered_df[export_cols].to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Export Filtered Ledger to CSV",
-            data=csv_data,
-            file_name=f"ucsb_ski_team_ledger_{selected_season}_{date.today().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            help="Download these records for club sports audit, AS finance review, or spreadsheet backup."
-        )
+        dl_col1, dl_col2 = st.columns(2)
+        with dl_col1:
+            export_cols = [c for c in filtered_df.columns if c not in ["Row", "Date_dt"]]
+            csv_data = filtered_df[export_cols].to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label=f"Export Filtered View ({len(filtered_df):,} Rows)",
+                data=csv_data,
+                file_name=f"ucsb_ski_team_ledger_{selected_season}_{date.today().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Download currently filtered records for audit or quick inspection."
+            )
+        with dl_col2:
+            master_csv = get_master_ledger_csv_bytes(is_officer=is_officer)
+            st.download_button(
+                label=f"Export Master Ledger ({len(full_ledger):,} Rows)",
+                data=master_csv,
+                file_name=f"ucsb_ski_team_master_ledger_all_seasons_{date.today().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Download complete historical master ledger across all seasons."
+            )
 
     with col_del:
         with st.popover("Treasurer Actions"):

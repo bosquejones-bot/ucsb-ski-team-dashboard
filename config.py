@@ -52,6 +52,8 @@ AVAILABLE_SEASONS = ["2026-2027", "2025-2026"]
 
 # Official Google Form / Sheets integration defaults (retrieved securely from secrets)
 DEFAULT_MEMBERSHIP_FORM_SHEET_URL = _get_secret("MEMBERSHIP_FORM_SHEET_URL", "")
+DEFAULT_LEDGER_SHEET_URL = _get_secret("LEDGER_SHEET_URL", "")
+LEDGER_WEBHOOK_URL = _get_secret("LEDGER_WEBHOOK_URL", "")
 
 # Default Trip Sign-Up Driver Options
 DEFAULT_TRIP_DRIVER_OPTIONS = [

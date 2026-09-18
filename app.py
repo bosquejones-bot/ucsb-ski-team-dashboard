@@ -84,7 +84,7 @@ if not os.path.exists(os.path.join(ROOT_DIR, "utils", "data_manager.py")):
     )
     st.stop()
 
-from config import THEME_COLORS, CURRENT_SEASON, AVAILABLE_SEASONS, OFFICER_PASSWORD
+import config
 import importlib
 import utils.data_manager
 import modules.financials
@@ -96,7 +96,8 @@ import modules.trip_estimator
 import modules.todo
 import modules.calendar_view
 
-# Ensure submodules are freshly reloaded on each run
+# Ensure config and submodules are freshly reloaded on each run
+importlib.reload(config)
 importlib.reload(utils.data_manager)
 importlib.reload(modules.financials)
 importlib.reload(modules.ledger)
@@ -106,6 +107,8 @@ importlib.reload(modules.trip_creator)
 importlib.reload(modules.trip_estimator)
 importlib.reload(modules.todo)
 importlib.reload(modules.calendar_view)
+
+from config import THEME_COLORS, CURRENT_SEASON, AVAILABLE_SEASONS, OFFICER_PASSWORD
 
 from utils.data_manager import (
     ensure_data_initialized, get_financial_kpis, load_members,
