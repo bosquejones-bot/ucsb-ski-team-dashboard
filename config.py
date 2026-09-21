@@ -105,31 +105,31 @@ DESTINATIONS = {
         "one_way_miles": 360,
         "round_trip_miles": 720,
         "default_nights": 3,
-        "description": "Primary team destination. Mammoth Mountain recreational trips and USCSA races.",
+        "description": "Mammy",
     },
     "Bear Valley": {
         "one_way_miles": 380,
         "round_trip_miles": 760,
         "default_nights": 3,
-        "description": "Central Sierra mountain located in Alpine County, known for deep snowpack.",
+        "description": "aka Beer Valley",
     },
     "China Peak": {
         "one_way_miles": 275,
         "round_trip_miles": 550,
         "default_nights": 2,
-        "description": "Central Sierra mountain resort, popular for race qualifiers and weekend runs.",
+        "description": "Chin on my Pea",
     },
     "Big Bear": {
         "one_way_miles": 185,
         "round_trip_miles": 370,
         "default_nights": 2,
-        "description": "Southern California weekend getaway. Bear Mountain and Snow Summit.",
+        "description": "Jacob's Holy Land",
     },
     "Palisades": {
         "one_way_miles": 450,
         "round_trip_miles": 900,
         "default_nights": 4,
-        "description": "North Lake Tahoe legendary terrain and spring ski trips.",
+        "description": "It's still Squaw",
     },
 }
 
@@ -140,11 +140,12 @@ TRIP_STATUS_OPTIONS = ["Planning", "Confirmed", "Completed", "Cancelled"]
 # Event Types & Statuses (Meetings, Socials, Dryland, etc.)
 EVENT_TYPES = [
     "Club Meeting",
+    "Staff Meeting",
     "Social",
-    "Fundraiser / Merch",
+    "Fundraiser",
     "Competition / Race",
-    "Dryland / Fitness",
-    "Clinic / Workshop",
+    "Tabling / Outreach",
+    "Training",
     "Other"
 ]
 EVENT_STATUS_OPTIONS = ["Planning", "Confirmed", "Completed", "Cancelled"]
@@ -161,6 +162,7 @@ ANNUAL_DUES_AMOUNT = 60.00     # Typical yearly dues per member
 # Ledger categories
 INCOME_CATEGORIES = [
     "Membership Dues",
+    "AS Funding",
     "Trip Payment",
     "Membership",
     "Fundraising",
