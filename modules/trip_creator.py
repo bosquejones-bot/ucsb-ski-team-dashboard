@@ -251,9 +251,25 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
             status = st.selectbox("Trip Status", ["Planning", "Confirmed", "Completed", "Cancelled"], index=0, key="ct_status")
 
         with c3:
-            start_date = st.date_input("Start Date", value=date.today() + timedelta(days=21), key="ct_start")
-            nights = st.number_input("Nights", min_value=1, max_value=14, value=default_nights, step=1, key=f"ct_nights_{destination_choice}")
-            end_date = start_date + timedelta(days=int(nights))
+            col_sd, col_ed = st.columns(2)
+            with col_sd:
+                start_date = st.date_input("Start Date *", value=date.today() + timedelta(days=21), key="ct_start")
+            with col_ed:
+                if "ct_prev_start" not in st.session_state:
+                    st.session_state["ct_prev_start"] = start_date
+
+                if st.session_state["ct_prev_start"] != start_date:
+                    st.session_state["ct_prev_start"] = start_date
+                    st.session_state["ct_end"] = start_date
+                elif "ct_end" in st.session_state and st.session_state["ct_end"] < start_date:
+                    st.session_state["ct_end"] = start_date
+
+                saved_ed = st.session_state.get("ct_end", start_date + timedelta(days=default_nights))
+                if saved_ed < start_date:
+                    saved_ed = start_date
+                end_date = st.date_input("End Date *", value=saved_ed, min_value=start_date, key="ct_end")
+            nights = max(0, (end_date - start_date).days)
+            st.caption(f"Trip Duration: **{nights} night(s)** &bull; Return on {end_date.strftime('%a, %b %d')}")
 
         c_att1, c_att2, c_att3 = st.columns(3)
         with c_att1:
@@ -274,11 +290,14 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
 
         st.markdown("##### Budget Breakdown")
         if trip_type == "Competition":
+            st.caption("Enter gross estimated costs below. Use the checkboxes to designate items covered by UCSB.")
             c_c1, c_c2 = st.columns(2)
             with c_c1:
                 cabin_cost = st.number_input("Cabin / Housing ($)", min_value=0.0, value=2400.0, step=50.0, key="ct_cabin")
+                school_covers_cabin = st.checkbox("UCSB covers Housing", value=False, key="ct_sc_cabin")
             with c_c2:
                 food_cost = st.number_input("Food & Drinks ($)", min_value=0.0, value=400.0, step=25.0, key="ct_food")
+                school_covers_food = st.checkbox("UCSB covers Food & Drinks", value=False, key="ct_sc_food")
 
             c_c3, c_c4, c_c5 = st.columns(3)
             with c_c3:
@@ -301,6 +320,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                     help=f"Calculated as {attendees_count} expected attendees x ${ticket_price:,.2f} ticket price.",
                     key=f"ct_tix_{attendees_count}_{ticket_price}"
                 )
+                school_covers_tickets = st.checkbox("UCSB covers Lift Tickets", value=False, key="ct_sc_tickets")
             with c_c5:
                 # Calculate Estimated Gas using round trip miles times 0.70 times amount of vehicles
                 calc_gas = float(round(miles * 0.70 * vehicles, 2))
@@ -312,6 +332,34 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                     help=f"Calculated as $0.70/mile x {miles} RT miles x {vehicles} vehicle(s).",
                     key=f"ct_gas_{destination_choice}_{miles}_{vehicles}"
                 )
+                school_covers_gas = st.checkbox("UCSB covers Gas", value=False, key="ct_sc_gas")
+
+            covered_items = []
+            school_funding_amount = 0.0
+            if school_covers_cabin:
+                covered_items.append("Housing")
+                school_funding_amount += cabin_cost
+            if school_covers_food:
+                covered_items.append("Food")
+                school_funding_amount += food_cost
+            if school_covers_tickets:
+                covered_items.append("Lift Tickets")
+                school_funding_amount += lift_tickets
+            if school_covers_gas:
+                covered_items.append("Gas")
+                school_funding_amount += gas_cost
+
+            school_coverage_details = ", ".join(covered_items)
+            total_trip_cost = cabin_cost + food_cost + lift_tickets + gas_cost
+            net_trip_cost = max(0.0, total_trip_cost - school_funding_amount)
+            calculated_ticket_price = net_trip_cost / max(1, attendees_count)
+
+            st.write("")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Gross Budget (Grant Requisition)", f"${total_trip_cost:,.2f}", help="Total expenditure proposal for UCSB.")
+            b2.metric("UCSB Subsidy", f"${school_funding_amount:,.2f}", delta=f"{len(covered_items)} item(s) covered" if covered_items else None)
+            b3.metric("Net Team Outflow", f"${net_trip_cost:,.2f}", help="Remaining balance paid by club dues or athletes.")
+            b4.metric("Fee / Competitor", f"${calculated_ticket_price:,.2f}", help="Per-person share charged to participating competitors.")
         else:
             # Recreational trip: Lift Tickets ($) and Estimated Gas ($) not available
             c_c1, c_c2 = st.columns(2)
@@ -322,12 +370,13 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
             ticket_price = 0.0
             lift_tickets = 0.0
             gas_cost = 0.0
+            school_funding_amount = 0.0
+            school_coverage_details = ""
+            total_trip_cost = cabin_cost + food_cost + lift_tickets + gas_cost
+            net_trip_cost = total_trip_cost
+            calculated_ticket_price = total_trip_cost / max(1, attendees_count)
             st.caption("*Lift Tickets and Estimated Gas options are only available for competition trips.*")
-
-        total_trip_cost = cabin_cost + food_cost + lift_tickets + gas_cost
-        calculated_ticket_price = total_trip_cost / max(1, attendees_count)
-
-        st.caption(f"Estimated Total Trip Outflow: **\\${total_trip_cost:,.2f}** &bull; Calculated Per-Skier Share: **\\${calculated_ticket_price:,.2f}**")
+            st.caption(f"Estimated Total Trip Outflow: **\\${total_trip_cost:,.2f}** &bull; Calculated Per-Skier Share: **\\${calculated_ticket_price:,.2f}**")
 
         trip_notes = st.text_input("Internal Trip Notes", placeholder="e.g. Leaving IV Friday afternoon, condo reservation #1234", key="ct_notes")
 
@@ -474,7 +523,10 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 status=status,
                 notes=trip_notes,
                 season=target_trip_season,
-                is_officer=is_officer
+                is_officer=is_officer,
+                school_funding=school_funding_amount,
+                net_cost=net_trip_cost,
+                school_coverage_details=school_coverage_details
             )
             if success:
                 st.session_state["trip_created_show_script"] = True
@@ -626,7 +678,9 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             target_attendees = max(1, int(selected_trip_row.get("Attendees", 1)))
             target_vehicles = max(1, int(selected_trip_row.get("Vehicles", 1)))
             total_cost = float(selected_trip_row.get("TotalCost", 0.0))
-            approx_ticket_price = total_cost / target_attendees
+            school_funding = float(selected_trip_row.get("SchoolFunding", 0.0)) if pd.notnull(selected_trip_row.get("SchoolFunding")) else 0.0
+            net_cost = float(selected_trip_row.get("NetCost", total_cost - school_funding)) if pd.notnull(selected_trip_row.get("NetCost")) else max(0.0, total_cost - school_funding)
+            approx_ticket_price = net_cost / target_attendees
 
             paid_df = signups_df[signups_df["PaymentReceived"] == True] if not signups_df.empty else pd.DataFrame()
             paid_count = len(paid_df)
@@ -661,8 +715,10 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 value=f"{total_signups} skiers"
             )
             m2.metric(
-                label="Trip Cost per Person",
-                value=cost_per_person_str
+                label="Fee per Competitor" if selected_trip_row.get("TripType") == "Competition" else "Trip Cost per Person",
+                value=cost_per_person_str,
+                delta=f"-${school_funding:,.0f} school funded" if school_funding > 0 else None,
+                delta_color="normal"
             )
             m3.metric(
                 label="Driver Capacity Available",
@@ -1037,6 +1093,9 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 gas_c = float(selected_trip_row.get('GasCost', 0))
                 tickets_c = float(selected_trip_row.get('LiftTicketsCost', 0))
                 total_c = float(selected_trip_row.get('TotalCost', 0))
+                funding_c = float(selected_trip_row.get('SchoolFunding', 0)) if pd.notnull(selected_trip_row.get('SchoolFunding')) else 0.0
+                net_c = float(selected_trip_row.get('NetCost', total_c - funding_c)) if pd.notnull(selected_trip_row.get('NetCost')) else max(0.0, total_c - funding_c)
+                cov_det = str(selected_trip_row.get('SchoolCoverageDetails', '')).strip()
 
                 budget_parts = [
                     f"Cabin \\${cabin_c:,.0f}",
@@ -1046,9 +1105,16 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     budget_parts.append(f"Gas \\${gas_c:,.0f}")
                 if tickets_c > 0:
                     budget_parts.append(f"Tickets \\${tickets_c:,.0f}")
-                budget_parts.append(f"Total \\${total_c:,.0f} (~\\${approx_ticket_price:,.0f} / skier)")
+                if funding_c > 0:
+                    budget_parts.append(f"Gross \\${total_c:,.0f}")
+                    budget_parts.append(f"School Subsidy -\\${funding_c:,.0f}")
+                    budget_parts.append(f"Net Team Cost \\${net_c:,.0f} (~\\${approx_ticket_price:,.0f} / competitor)")
+                else:
+                    budget_parts.append(f"Total \\${total_c:,.0f} (~\\${approx_ticket_price:,.0f} / skier)")
 
                 st.caption("Budget: " + " | ".join(budget_parts))
+                if funding_c > 0 and cov_det:
+                    st.caption(f"*School Coverage Items: {cov_det}*")
             with c_card_stat:
                 st.write("")
                 curr_op_stat = str(selected_trip_row.get("Status", "Planning")).strip()

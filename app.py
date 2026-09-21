@@ -628,14 +628,16 @@ def main():
         if not is_officer:
             with st.expander("Officer Login (Unlock Live Data & Editing)", expanded=False):
                 st.caption("Enter officer passcode to view live UCSB Ski Team data, log receipts, or create trips:")
-                code_input = st.text_input("Officer Passcode", type="password", placeholder="Enter passcode", key="officer_passcode_input")
-                if st.button("Unlock Live Data & Editing", use_container_width=True, key="btn_unlock_officer"):
-                    if code_input.strip() == OFFICER_PASSWORD:
-                        st.session_state["is_officer"] = True
-                        st.session_state["officer_editing"] = True
-                        st.rerun()
-                    else:
-                        st.error("Incorrect passcode.")
+                with st.form("officer_login_form", clear_on_submit=False, border=False, enter_to_submit=True):
+                    code_input = st.text_input("Officer Passcode", type="password", placeholder="Enter passcode", key="officer_passcode_input")
+                    submit_login = st.form_submit_button("Unlock Live Data & Editing", use_container_width=True, type="primary")
+                    if submit_login:
+                        if code_input.strip() == OFFICER_PASSWORD:
+                            st.session_state["is_officer"] = True
+                            st.session_state["officer_editing"] = True
+                            st.rerun()
+                        else:
+                            st.error("Incorrect passcode.")
             can_edit = False
         else:
             st.success("Officer Mode Active")

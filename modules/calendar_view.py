@@ -94,6 +94,23 @@ def _get_type_tag(category: str, item_type: str) -> str:
     return f"[{category}]"
 
 
+def _generate_time_slots() -> list:
+    """Generate 12-hour AM/PM time slots in 30-minute intervals (48 slots total)."""
+    slots = []
+    for h in range(24):
+        for m in (0, 30):
+            ampm = "AM" if h < 12 else "PM"
+            h12 = h % 12
+            if h12 == 0:
+                h12 = 12
+            slots.append(f"{h12}:{m:02d} {ampm}")
+    return slots
+
+
+STANDARD_TIME_SLOTS = _generate_time_slots()
+TIME_OPTIONS = STANDARD_TIME_SLOTS + ["Custom Time..."]
+
+
 def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = False, can_edit: bool = None):
     """Render the Team Calendar & Events view with timeline, monthly calendar, and event scheduling."""
     if can_edit is None:
@@ -122,7 +139,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
             per_skier = tot_c / max(1, att)
 
             notes_val = str(trip.get("Notes", "")).strip()
-            desc = f"Destination: {trip.get('Destination', '')} | {nights} Nights | Budget: ${tot_c:,.0f} (~${per_skier:,.0f} / skier)"
+            desc = f"Destination: {trip.get('Destination', '')} | {nights} Nights | Budget: \\${tot_c:,.0f} (~\\${per_skier:,.0f} / skier)"
             if notes_val and notes_val.lower() != "nan":
                 desc += f"\nNotes: {notes_val}"
 
@@ -695,32 +712,103 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
 
         target_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
 
-        with st.form("form_create_event", clear_on_submit=True):
+        with st.container():
             col_t1, col_t2 = st.columns([2.5, 1.5])
             with col_t1:
-                evt_title = st.text_input("Event Title *", placeholder="e.g., Fall General Meeting #1, IV Sunset Social, Mammoth Wax Clinic", disabled=not can_edit)
+                evt_title = st.text_input("Event Title *", placeholder="e.g., Fall General Meeting #1, IV Sunset Social, Mammoth Wax Clinic", disabled=not can_edit, key="new_evt_title")
             with col_t2:
-                evt_type = st.selectbox("Event Category", EVENT_TYPES, disabled=not can_edit)
+                evt_type = st.selectbox("Event Category", EVENT_TYPES, disabled=not can_edit, key="new_evt_type")
 
             # Dates
             c_d1, c_d2 = st.columns(2)
             with c_d1:
-                evt_start_date = st.date_input("Start Date *", value=date.today() + timedelta(days=7), disabled=not can_edit)
+                evt_start_date = st.date_input(
+                    "Start Date *",
+                    value=st.session_state.get("new_evt_start_date", date.today() + timedelta(days=7)),
+                    disabled=not can_edit,
+                    key="new_evt_start_date"
+                )
             with c_d2:
-                evt_end_date = st.date_input("End Date (leave same for single-day events)", value=evt_start_date, disabled=not can_edit)
+                if "new_evt_prev_start" not in st.session_state:
+                    st.session_state["new_evt_prev_start"] = evt_start_date
 
-            # Times
-            c_all_day, c_st, c_et = st.columns([1.2, 1.4, 1.4])
+                # Automatically update end date to start date when start date is changed
+                if st.session_state["new_evt_prev_start"] != evt_start_date:
+                    st.session_state["new_evt_prev_start"] = evt_start_date
+                    st.session_state["new_evt_end_date"] = evt_start_date
+                elif "new_evt_end_date" in st.session_state and st.session_state["new_evt_end_date"] < evt_start_date:
+                    st.session_state["new_evt_end_date"] = evt_start_date
+
+                evt_end_date = st.date_input(
+                    "End Date (leave same for single-day events)",
+                    value=st.session_state.get("new_evt_end_date", evt_start_date),
+                    min_value=evt_start_date,
+                    disabled=not can_edit,
+                    key="new_evt_end_date"
+                )
+
+            # Times: Option A standard 30-min slots + Custom manual editing
+            c_all_day, c_mode = st.columns([1.1, 2.9])
             with c_all_day:
                 st.write("")
-                st.write("")
-                is_all_day = st.checkbox("All-day event?", value=False, disabled=not can_edit)
-            with c_st:
-                default_st = datetime.strptime("19:00", "%H:%M").time()
-                evt_st_val = st.time_input("Start Time", value=default_st, disabled=not can_edit or is_all_day)
-            with c_et:
-                default_et = datetime.strptime("20:30", "%H:%M").time()
-                evt_et_val = st.time_input("End Time", value=default_et, disabled=not can_edit or is_all_day)
+                is_all_day = st.checkbox("All-day event?", value=False, disabled=not can_edit, key="new_evt_all_day")
+            with c_mode:
+                time_entry_mode = st.radio(
+                    "Time Selection Format",
+                    ["Standard 30-Min Dropdowns", "Custom Exact Time Input"],
+                    horizontal=True,
+                    disabled=not can_edit or is_all_day,
+                    key="new_evt_time_mode",
+                    help="Choose standard half-hour slots or manually edit exact hours and minutes."
+                )
+
+            c_st, c_et = st.columns(2)
+            default_st = datetime.strptime("19:00", "%H:%M").time()
+            default_et = datetime.strptime("20:30", "%H:%M").time()
+
+            if time_entry_mode == "Custom Exact Time Input":
+                with c_st:
+                    custom_st_val = st.time_input(
+                        "Start Time (Exact / Custom)",
+                        value=default_st,
+                        disabled=not can_edit or is_all_day,
+                        key="new_evt_custom_st",
+                        help="Enter or select exact start hour and minute."
+                    )
+                with c_et:
+                    custom_et_val = st.time_input(
+                        "End Time (Exact / Custom)",
+                        value=default_et,
+                        disabled=not can_edit or is_all_day,
+                        key="new_evt_custom_et",
+                        help="Enter or select exact end hour and minute."
+                    )
+                st.caption("Custom mode: edit exact start and end times down to the minute.")
+                sel_st = None
+                sel_et = None
+            else:
+                idx_st = STANDARD_TIME_SLOTS.index("7:00 PM") if "7:00 PM" in STANDARD_TIME_SLOTS else 0
+                idx_et = STANDARD_TIME_SLOTS.index("8:30 PM") if "8:30 PM" in STANDARD_TIME_SLOTS else 0
+                with c_st:
+                    sel_st = st.selectbox(
+                        "Start Time (Standard Slot)",
+                        options=STANDARD_TIME_SLOTS,
+                        index=idx_st,
+                        disabled=not can_edit or is_all_day,
+                        key="new_evt_st_slot",
+                        help="Select standard 30-min slot (or switch to 'Custom Exact Time Input' above)."
+                    )
+                with c_et:
+                    sel_et = st.selectbox(
+                        "End Time (Standard Slot)",
+                        options=STANDARD_TIME_SLOTS,
+                        index=idx_et,
+                        disabled=not can_edit or is_all_day,
+                        key="new_evt_et_slot",
+                        help="Select standard 30-min slot (or switch to 'Custom Exact Time Input' above)."
+                    )
+                custom_st_val = None
+                custom_et_val = None
 
             # Location (MANUAL FREE-TEXT INPUT - Strictly NO Host/Lead input)
             c_loc, c_stat = st.columns([2.5, 1.5])
@@ -729,57 +817,71 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                     "Event Location (Enter manually) *",
                     placeholder="e.g., Embarcadero Hall 101, Del Playa Dr, Rec Cen Turf, Rockwood...",
                     help="Enter specific classroom, house, beach, or park. Locations are free-text for maximum flexibility.",
-                    disabled=not can_edit
+                    disabled=not can_edit,
+                    key="new_evt_location"
                 )
             with c_stat:
-                evt_status = st.selectbox("Status", EVENT_STATUS_OPTIONS, index=1, disabled=not can_edit)
+                evt_status = st.selectbox("Status", EVENT_STATUS_OPTIONS, index=1, disabled=not can_edit, key="new_evt_status")
 
             # RSVP Link
-            evt_rsvp = st.text_input("RSVP / Ticket / Info Link (Optional)", placeholder="https://forms.gle/... or Instagram post link", disabled=not can_edit)
+            evt_rsvp = st.text_input("RSVP / Ticket / Info Link (Optional)", placeholder="https://forms.gle/... or Instagram post link", disabled=not can_edit, key="new_evt_rsvp")
 
             # Description
             evt_desc = st.text_area(
                 "Event Description & Meeting Agenda",
                 placeholder="Details, what to bring, gear requirements, agenda...",
-                disabled=not can_edit
+                disabled=not can_edit,
+                key="new_evt_desc"
             )
 
-            submit_event = st.form_submit_button(
+            submit_event = st.button(
                 "Save Event to Schedule",
                 type="primary",
                 use_container_width=True,
-                disabled=not can_edit
+                disabled=not can_edit,
+                key="btn_save_event"
             )
 
             if submit_event:
                 if not evt_title.strip():
                     st.error("Please provide an Event Title.")
                 else:
-                    st_str = "" if is_all_day else evt_st_val.strftime("%H:%M")
-                    et_str = "" if is_all_day else evt_et_val.strftime("%H:%M")
+                    if is_all_day:
+                        st_str = ""
+                        et_str = ""
+                    elif time_entry_mode == "Custom Exact Time Input":
+                        st_str = custom_st_val.strftime("%H:%M") if custom_st_val else "19:00"
+                        et_str = custom_et_val.strftime("%H:%M") if custom_et_val else "20:30"
+                    else:
+                        st_str = datetime.strptime(sel_st, "%I:%M %p").strftime("%H:%M") if sel_st else "19:00"
+                        et_str = datetime.strptime(sel_et, "%I:%M %p").strftime("%H:%M") if sel_et else "20:30"
+
                     sd_str = evt_start_date.strftime("%Y-%m-%d")
                     ed_str = evt_end_date.strftime("%Y-%m-%d") if evt_end_date else sd_str
 
-                    ok = add_event(
-                        season=target_season,
-                        title=evt_title.strip(),
-                        event_type=evt_type,
-                        start_date=sd_str,
-                        end_date=ed_str,
-                        start_time=st_str,
-                        end_time=et_str,
-                        location=evt_location.strip(),
-                        status=evt_status,
-                        officer_lead="",
-                        description=evt_desc.strip(),
-                        rsvp_link=evt_rsvp.strip(),
-                        is_officer=is_officer
-                    )
-                    if ok:
-                        st.success(f"Event '{evt_title.strip()}' scheduled successfully for season {target_season}!")
-                        st.rerun()
+                    if not is_all_day and sd_str == ed_str and st_str and et_str and et_str <= st_str:
+                        st.error("End Time must be after Start Time for same-day events.")
                     else:
-                        st.error("Could not save event. Please check inputs and try again.")
+                        ok = add_event(
+                            season=target_season,
+                            title=evt_title.strip(),
+                            event_type=evt_type,
+                            start_date=sd_str,
+                            end_date=ed_str,
+                            start_time=st_str,
+                            end_time=et_str,
+                            location=evt_location.strip(),
+                            status=evt_status,
+                            officer_lead="",
+                            description=evt_desc.strip(),
+                            rsvp_link=evt_rsvp.strip(),
+                            is_officer=is_officer
+                        )
+                        if ok:
+                            st.success(f"Event '{evt_title.strip()}' scheduled successfully for season {target_season}!")
+                            st.rerun()
+                        else:
+                            st.error("Could not save event. Please check inputs and try again.")
 
         st.divider()
 

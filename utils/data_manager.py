@@ -1724,6 +1724,18 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             df["TripType"] = "Recreational"
         if "AttendeeRoster" not in df.columns:
             df["AttendeeRoster"] = ""
+        if "SchoolFunding" not in df.columns:
+            df["SchoolFunding"] = 0.0
+        else:
+            df["SchoolFunding"] = pd.to_numeric(df["SchoolFunding"], errors="coerce").fillna(0.0)
+        if "NetCost" not in df.columns:
+            df["NetCost"] = df["TotalCost"] if "TotalCost" in df.columns else 0.0
+        else:
+            df["NetCost"] = pd.to_numeric(df["NetCost"], errors="coerce").fillna(df["TotalCost"] if "TotalCost" in df.columns else 0.0)
+        if "SchoolCoverageDetails" not in df.columns:
+            df["SchoolCoverageDetails"] = ""
+        else:
+            df["SchoolCoverageDetails"] = df["SchoolCoverageDetails"].fillna("").astype(str)
 
         if season and season != "All Seasons":
             return df[df["Season"] == season].copy().reset_index(drop=True)
@@ -1742,8 +1754,9 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                      nights: int, miles: float, attendees: int, vehicles: int, cabin: float,
                      food: float, tickets: float, gas: float, attendee_roster: list,
                      status: str = "Planning", notes: str = "", season: str = CURRENT_SEASON,
-                     is_officer: bool = False) -> bool:
-    """Create a new trip in the trip creator with attendee roster and trip type."""
+                     is_officer: bool = False, school_funding: float = 0.0, net_cost: float = None,
+                     school_coverage_details: str = "") -> bool:
+    """Create a new trip in the trip creator with attendee roster, school funding, and trip type."""
     try:
         df = load_trips(season=None, is_officer=is_officer)
         next_id = f"TRIP-{len(df) + 1:03d}"
@@ -1767,7 +1780,9 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                     attendees = len(attendee_roster)
                 comp_members_to_signup = comp_df.to_dict("records")
 
-        total_cost = cabin + food + tickets + gas
+        total_cost = float(cabin + food + tickets + gas)
+        funding_amt = float(school_funding) if school_funding is not None else 0.0
+        final_net = float(net_cost) if net_cost is not None else max(0.0, total_cost - funding_amt)
         roster_str = ", ".join(attendee_roster) if attendee_roster else ""
         
         new_trip = pd.DataFrame([{
@@ -1787,6 +1802,9 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
             "LiftTicketsCost": float(tickets),
             "GasCost": float(gas),
             "TotalCost": float(total_cost),
+            "SchoolFunding": float(funding_amt),
+            "NetCost": float(final_net),
+            "SchoolCoverageDetails": str(school_coverage_details).strip(),
             "RevenueCollected": 0.0,
             "Status": status,
             "AttendeeRoster": roster_str,
@@ -1816,7 +1834,7 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                         "Name": c_name,
                         "Phone": c_phone,
                         "DrivingCapacity": "Cannot drive",
-                        "Questions": "Competition Team Roster",
+                        "Questions": "Competition Team member automatic registration",
                         "PaymentReceived": False,
                         "SignupDate": date.today().strftime("%Y-%m-%d")
                     })
@@ -1856,13 +1874,15 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
 def add_trip(name: str, destination: str, start_date: str, end_date: str, nights: int,
              miles: float, attendees: int, vehicles: int, cabin: float, food: float,
              tickets: float, gas: float, status: str = "Planning", notes: str = "",
-             season: str = CURRENT_SEASON, is_officer: bool = False, trip_type: str = "Recreational") -> bool:
+             season: str = CURRENT_SEASON, is_officer: bool = False, trip_type: str = "Recreational",
+             school_funding: float = 0.0, net_cost: float = None, school_coverage_details: str = "") -> bool:
     """Compatibility wrapper for add_created_trip."""
     return add_created_trip(
         name=name, destination=destination, trip_type=trip_type, start_date=start_date,
         end_date=end_date, nights=nights, miles=miles, attendees=attendees, vehicles=vehicles,
         cabin=cabin, food=food, tickets=tickets, gas=gas, attendee_roster=[], status=status,
-        notes=notes, season=season, is_officer=is_officer
+        notes=notes, season=season, is_officer=is_officer, school_funding=school_funding,
+        net_cost=net_cost, school_coverage_details=school_coverage_details
     )
 
 
@@ -2116,11 +2136,15 @@ def record_trip_payment_in_ledger(athlete_name: str, trip_name: str, trip_id: st
 
             if not trip_match.empty:
                 t_row = trip_match.iloc[0]
-                t_cost = float(t_row.get("TotalCost", 0.0))
+                t_cost = float(t_row.get("NetCost", t_row.get("TotalCost", 0.0)))
                 t_att = max(1, int(t_row.get("Attendees", 1)))
-                final_amount = round(t_cost / t_att, 2) if t_cost > 0 else 95.0
+                final_amount = round(t_cost / t_att, 2) if t_cost > 0 else 0.0
             else:
                 final_amount = 95.0
+
+        if final_amount <= 0.0:
+            # 100% subsidized by school funding - no attendee payment required
+            return True
 
         df_ledger = load_ledger(season=None, is_officer=is_officer)
 
