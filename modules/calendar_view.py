@@ -428,6 +428,34 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                     t_view_df.columns = [c.replace("TripType", "Type").replace("TotalCost", "Total Budget") for c in t_view_df.columns]
                     st.dataframe(t_view_df, width="stretch", hide_index=True)
 
+                if can_edit and filtered_items:
+                    st.write("")
+                    with st.expander("Delete Scheduled Item (Events or Trips)"):
+                        st.caption("Select any scheduled club event or ski trip to permanently remove it from the schedule.")
+                        del_col_sel, del_col_btn = st.columns([3.2, 1.2])
+                        with del_col_sel:
+                            item_lookup = {f"[{it['ItemType']}] {it['Title']} ({it['StartDate']})": it for it in filtered_items}
+                            sel_del_name = st.selectbox("Select Item to Delete", options=list(item_lookup.keys()), key="table_view_sel_del_item")
+                        with del_col_btn:
+                            st.write("")
+                            st.write("")
+                            if sel_del_name:
+                                target_item = item_lookup[sel_del_name]
+                                with st.popover("Delete Item", use_container_width=True):
+                                    st.caption(f"Permanently delete {target_item['ItemType'].lower()} '{target_item['Title']}'?")
+                                    if target_item["ItemType"] == "Trip":
+                                        st.caption("This will also delete associated signups and attendee roster links.")
+                                    if st.button("Confirm Delete", key=f"btn_confirm_table_del_{target_item['ID']}", type="primary", use_container_width=True):
+                                        if target_item["ItemType"] == "Event":
+                                            ok = delete_event(target_item["ID"], is_officer=is_officer)
+                                        else:
+                                            ok = delete_trip(target_item["ID"], is_officer=is_officer)
+                                        if ok:
+                                            st.success(f"Deleted {target_item['Title']}.")
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Failed to delete {target_item['ItemType'].lower()}.")
+
             else:
                 # =============================================================
                 # TIMELINE CARDS VIEW (NO EMOJIS, NO HOST/LEAD)
@@ -488,6 +516,25 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
 
                             if it["RsvpLink"]:
                                 st.link_button("RSVP / Sign Up", it["RsvpLink"], use_container_width=True, key=f"rsvp_btn_{it['ID']}")
+
+                            with st.popover("Delete", use_container_width=True, help=f"Delete this {it['ItemType'].lower()}"):
+                                if not can_edit:
+                                    st.info("Officer Editing Mode required to delete.")
+                                else:
+                                    item_kind = "ski trip" if it["ItemType"] == "Trip" else "club event"
+                                    st.caption(f"Permanently delete {item_kind} '{it['Title']}'?")
+                                    if it["ItemType"] == "Trip":
+                                        st.caption("This will also remove associated signups and attendee roster links.")
+                                    if st.button("Confirm Delete", key=f"btn_del_timeline_{it['ItemType']}_{it['ID']}", type="primary", use_container_width=True):
+                                        if it["ItemType"] == "Event":
+                                            del_ok = delete_event(it["ID"], is_officer=is_officer)
+                                        else:
+                                            del_ok = delete_trip(it["ID"], is_officer=is_officer)
+                                        if del_ok:
+                                            st.success(f"Deleted {it['Title']}.")
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Failed to delete {it['ItemType'].lower()}.")
 
                         st.divider()
 
@@ -885,23 +932,38 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
 
         st.divider()
 
-        # --- MANAGE EXISTING NON-TRIP EVENTS (NO HOST/LEAD, NO EMOJIS) ---
-        st.markdown("#### Manage Existing Events")
-        if events_df.empty:
-            st.info(f"No non-trip club events logged yet for '{selected_season}'.")
+        # --- MANAGE EXISTING EVENTS & TRIPS (NO HOST/LEAD, NO EMOJIS) ---
+        st.markdown("#### Manage Existing Events & Trips")
+        st.caption("Update scheduling statuses or permanently delete club events and ski trips.")
+
+        manage_filter = st.radio(
+            "Filter Items to Manage",
+            ["All Items", "Club Events Only", "Ski Trips Only"],
+            horizontal=True,
+            key="manage_sched_filter_radio"
+        )
+
+        items_to_manage = unified_items.copy()
+        if manage_filter == "Club Events Only":
+            items_to_manage = [it for it in items_to_manage if it["ItemType"] == "Event"]
+        elif manage_filter == "Ski Trips Only":
+            items_to_manage = [it for it in items_to_manage if it["ItemType"] == "Trip"]
+
+        if not items_to_manage:
+            st.info(f"No scheduled items found for '{selected_season}'.")
         else:
-            for _, evt in events_df.iterrows():
+            for it in items_to_manage:
                 with st.container():
-                    c_ev_info, c_ev_stat, c_ev_del = st.columns([2.8, 1.2, 1.0])
-                    with c_ev_info:
-                        tag_str = _get_type_tag(evt.get("EventType", ""), "Event")
-                        st.markdown(f"**{tag_str} {evt['Title']}**")
-                        d_str = _format_date_range(evt.get("StartDate", ""), evt.get("EndDate", ""))
-                        t_str = _format_time_range(evt.get("StartTime", ""), evt.get("EndTime", "")) if evt.get("StartTime") else "All Day"
-                        loc_str = evt.get("Location", "") or "No location specified"
+                    c_m_info, c_m_stat, c_m_del = st.columns([2.8, 1.2, 1.0])
+                    with c_m_info:
+                        tag_str = _get_type_tag(it["Category"], it["ItemType"])
+                        st.markdown(f"**{tag_str} {it['Title']}**")
+                        d_str = _format_date_range(it["StartDate"], it["EndDate"])
+                        t_str = _format_time_range(it["StartTime"], it["EndTime"]) if it["StartTime"] else ("Multi-Day Trip" if it["ItemType"] == "Trip" else "All Day")
+                        loc_str = it["Location"] or "No location specified"
                         st.caption(f"Date: {d_str} | Time: {t_str} | Location: {loc_str}")
-                    with c_ev_stat:
-                        curr_stat = str(evt.get("Status", "Confirmed")).strip()
+                    with c_m_stat:
+                        curr_stat = str(it.get("Status", "Confirmed")).strip()
                         stat_opts = [opt for opt in EVENT_STATUS_OPTIONS]
                         if curr_stat and curr_stat not in stat_opts:
                             stat_opts.insert(0, curr_stat)
@@ -910,24 +972,35 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                             "Status",
                             options=stat_opts,
                             index=idx_stat,
-                            key=f"manage_evt_stat_{evt['EventID']}_{curr_stat}",
+                            key=f"manage_item_stat_{it['ItemType']}_{it['ID']}_{curr_stat}",
                             disabled=not can_edit
                         )
                         if can_edit and new_stat != curr_stat:
-                            if update_event_status(evt["EventID"], new_stat, is_officer=is_officer):
-                                st.success(f"Updated {evt['Title']} status to {new_stat}.")
+                            if it["ItemType"] == "Event":
+                                up_ok = update_event_status(it["ID"], new_stat, is_officer=is_officer)
+                            else:
+                                up_ok = update_trip_status(it["ID"], new_stat, is_officer=is_officer)
+                            if up_ok:
+                                st.success(f"Updated {it['Title']} status to {new_stat}.")
                                 st.rerun()
-                    with c_ev_del:
+                    with c_m_del:
                         st.write("")
                         with st.popover("Delete"):
                             if not can_edit:
-                                st.info("Officer Editing Mode required to delete events.")
+                                st.info("Officer Editing Mode required to delete.")
                             else:
-                                st.caption(f"Permanently delete '{evt['Title']}'?")
-                                if st.button("Confirm Delete", key=f"btn_del_evt_{evt['EventID']}", type="primary"):
-                                    if delete_event(evt["EventID"], is_officer=is_officer):
-                                        st.success(f"Deleted {evt['Title']}.")
+                                item_kind = "ski trip" if it["ItemType"] == "Trip" else "club event"
+                                st.caption(f"Permanently delete {item_kind} '{it['Title']}'?")
+                                if it["ItemType"] == "Trip":
+                                    st.caption("This will also remove associated signups and member history.")
+                                if st.button("Confirm Delete", key=f"btn_del_manage_{it['ItemType']}_{it['ID']}", type="primary"):
+                                    if it["ItemType"] == "Event":
+                                        del_ok = delete_event(it["ID"], is_officer=is_officer)
+                                    else:
+                                        del_ok = delete_trip(it["ID"], is_officer=is_officer)
+                                    if del_ok:
+                                        st.success(f"Deleted {it['Title']}.")
                                         st.rerun()
                                     else:
-                                        st.error("Failed to delete event.")
+                                        st.error(f"Failed to delete {item_kind}.")
                     st.divider()
