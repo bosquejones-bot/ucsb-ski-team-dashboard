@@ -78,7 +78,7 @@ def render_merch_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = F
                     logged_by = st.selectbox("Logged By Officer", officer_pool)
 
                 target_merch_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-                submit_adj = st.form_submit_button("Record Merch Transaction", use_container_width=True)
+                submit_adj = st.form_submit_button("Record Merch Transaction", width="stretch")
 
                 if submit_adj:
                     signed_qty = -int(qty) if "Deduct" in action_type else int(qty)
@@ -128,7 +128,7 @@ def render_merch_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = F
             yaxis=dict(gridcolor="#283552"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_shirts, use_container_width=True)
+        st.plotly_chart(fig_shirts, width="stretch")
 
     with col_hoodie:
         st.subheader("Sweatshirt Inventory (by Size)")
@@ -156,7 +156,7 @@ def render_merch_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = F
             yaxis=dict(gridcolor="#283552"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig_hoodies, use_container_width=True)
+        st.plotly_chart(fig_hoodies, width="stretch")
 
     st.divider()
 

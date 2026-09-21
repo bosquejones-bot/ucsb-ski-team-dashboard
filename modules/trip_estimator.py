@@ -140,7 +140,7 @@ def render_trip_estimator_tab(is_officer: bool = False):
             xaxis=dict(gridcolor="#283552"),
             yaxis=dict(gridcolor="#283552")
         )
-        st.plotly_chart(fig_cost, use_container_width=True)
+        st.plotly_chart(fig_cost, width="stretch")
 
         st.markdown("##### Itemized Summary")
         disp_bd = df_breakdown.copy()

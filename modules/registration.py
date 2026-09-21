@@ -49,7 +49,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     value=DEFAULT_MEMBERSHIP_FORM_SHEET_URL,
                     help="Pre-filled with the official UCSB Ski and Board Team Member App responses spreadsheet."
                 )
-                if st.button("Sync Responses from Google Sheet", use_container_width=True):
+                if st.button("Sync Responses from Google Sheet", width="stretch"):
                     if not sheet_url_input.strip():
                         st.error("Please enter a valid Google Sheet URL or ID.")
                     else:
@@ -65,7 +65,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             with tab_upload:
                 uploaded_file = st.file_uploader("Upload Google Form Responses (.csv)", type=["csv"])
                 if uploaded_file is not None:
-                    if st.button("Import Uploaded CSV into Current Roster", use_container_width=True):
+                    if st.button("Import Uploaded CSV into Current Roster", width="stretch"):
                         target_s = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
                         try:
                             df_uploaded = pd.read_csv(uploaded_file)
@@ -194,7 +194,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     notes = st.text_input("Membership Form Notes", placeholder="e.g. Dietary restriction, carpool driver, gear inquiries")
 
                 target_reg_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-                submitted = st.form_submit_button("Save Member to Roster", use_container_width=True)
+                submitted = st.form_submit_button("Save Member to Roster", width="stretch")
                 if submitted:
                     if not name.strip():
                         st.error("Member Name is required.")
@@ -404,10 +404,10 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 data=csv_roster,
                 file_name=f"ucsb_ski_team_roster_{selected_season}_{date.today().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )
         with c_del:
-            with st.popover("Delete a Member", use_container_width=True):
+            with st.popover("Delete a Member", width="stretch"):
                 if not is_officer:
                     st.info("Officer access required to delete members. Enter the officer password in the sidebar to unlock.")
                 elif not can_edit:
@@ -427,7 +427,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                             options=list(pop_member_map.keys()),
                             key=f"pop_del_mbr_sel_{selected_season}"
                         )
-                        if st.button("Confirm Delete Member", type="primary", key=f"btn_pop_del_mbr_{selected_season}", use_container_width=True):
+                        if st.button("Confirm Delete Member", type="primary", key=f"btn_pop_del_mbr_{selected_season}", width="stretch"):
                             mid_del = pop_member_map[chosen_pop_lbl]
                             if delete_member(mid_del, is_officer=is_officer):
                                 st.success(f"Deleted member {chosen_pop_lbl}.")

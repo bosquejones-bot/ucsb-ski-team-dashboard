@@ -184,7 +184,7 @@ def render_trip_planner_tab():
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)"
         )
-        st.plotly_chart(fig_cost, use_container_width=True)
+        st.plotly_chart(fig_cost, width="stretch")
 
         # Attendance Sensitivity Curve
         st.markdown("##### Price Sensitivity vs. Skier Attendance")
@@ -214,10 +214,10 @@ def render_trip_planner_tab():
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)"
         )
-        st.plotly_chart(fig_sens, use_container_width=True)
+        st.plotly_chart(fig_sens, width="stretch")
 
         # Save Plan Button
-        if st.button("Save this Trip Budget Plan", type="primary", use_container_width=True):
+        if st.button("Save this Trip Budget Plan", type="primary", width="stretch"):
             success = add_trip(
                 name=trip_name,
                 destination=dest_choice,

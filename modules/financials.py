@@ -105,7 +105,7 @@ def render_financials_tab(selected_season: str = CURRENT_SEASON, is_officer: boo
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>%{fullData.name}: $%{y:,.2f}<extra></extra>"
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width="stretch")
             else:
                 st.info("No transaction data available for season cash flow comparison.")
         else:
@@ -168,7 +168,7 @@ def render_financials_tab(selected_season: str = CURRENT_SEASON, is_officer: boo
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>%{fullData.name}: $%{y:,.2f}<extra></extra>"
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width="stretch")
             else:
                 st.info(f"No dated transactions with cash flows recorded for season '{selected_season}'.")
 
@@ -195,7 +195,7 @@ def render_financials_tab(selected_season: str = CURRENT_SEASON, is_officer: boo
                 paper_bgcolor=THEME_COLORS["surface_bg"],
                 font=dict(color="#f0f4f8")
             )
-            st.plotly_chart(fig_donut, use_container_width=True)
+            st.plotly_chart(fig_donut, width="stretch")
         else:
             st.info("No expense transactions recorded.")
 

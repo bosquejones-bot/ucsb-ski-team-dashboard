@@ -333,7 +333,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                 data=unified_ics_data,
                 file_name=f"ucsb_ski_team_schedule_{season_slug}.ics",
                 mime="text/calendar",
-                use_container_width=True,
+                width="stretch",
                 help="Download full team calendar (trips and events) as an RFC 5545 .ics file compatible with Google Calendar, Apple Calendar, and Outlook."
             )
 
@@ -348,44 +348,36 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                 # =============================================================
                 st.markdown("#### Club Events (Editable in Table)")
                 if can_edit:
-                    st.caption("Double-click any cell to edit event details in-place. Changes are saved immediately to the events database.")
+                    st.caption("You can edit event titles, types, dates, times, and locations directly in the table. Click 'Save Event Edits' below to persist changes.")
                 else:
-                    st.caption("Club events table. Officer login with Editing Mode enabled is required to edit event details.")
+                    st.caption("Viewing scheduled events. Enable Editing Mode in the sidebar to make in-place adjustments.")
 
-                # Filter original events_df based on active category/status filter
                 f_event_ids = [it["ID"] for it in filtered_items if it["ItemType"] == "Event"]
-                raw_events_season = load_events(season=selected_season if selected_season != "All Seasons" else None, is_officer=is_officer)
-                filtered_events_for_edit = raw_events_season[raw_events_season["EventID"].isin(f_event_ids)].copy()
+                events_match = events_df[events_df["EventID"].isin(f_event_ids)].copy() if not events_df.empty else pd.DataFrame()
 
-                if filtered_events_for_edit.empty:
-                    st.info("No non-trip club events match the current filter.")
+                if events_match.empty:
+                    st.info("No club events match the current filter.")
                 else:
-                    # Select columns for editor (strictly NO Host/Lead column)
-                    edit_cols = [
-                        "EventID", "Title", "EventType", "StartDate", "EndDate",
-                        "StartTime", "EndTime", "Location", "Status", "Description", "RsvpLink"
-                    ]
-                    available_edit_cols = [c for c in edit_cols if c in filtered_events_for_edit.columns]
-                    editor_input_df = filtered_events_for_edit[available_edit_cols].copy()
+                    disp_cols = [c for c in ["EventID", "Title", "EventType", "StartDate", "EndDate", "StartTime", "EndTime", "Location", "Status", "Notes"] if c in events_match.columns]
+                    events_view_df = events_match[disp_cols].copy()
 
-                    # Data editor configuration
-                    col_config = {
-                        "EventID": st.column_config.TextColumn("ID", disabled=True),
+                    editable_config = {
+                        "EventID": st.column_config.TextColumn("Event ID", disabled=True),
                         "Title": st.column_config.TextColumn("Title", required=True),
-                        "EventType": st.column_config.SelectboxColumn("Category", options=EVENT_TYPES, required=True),
-                        "StartDate": st.column_config.TextColumn("Start Date (YYYY-MM-DD)", required=True),
-                        "EndDate": st.column_config.TextColumn("End Date (YYYY-MM-DD)"),
-                        "StartTime": st.column_config.TextColumn("Start Time (HH:MM)"),
-                        "EndTime": st.column_config.TextColumn("End Time (HH:MM)"),
+                        "EventType": st.column_config.SelectboxColumn("Type", options=EVENT_TYPES, required=True),
+                        "StartDate": st.column_config.DateColumn("Start Date", required=True),
+                        "EndDate": st.column_config.DateColumn("End Date"),
+                        "StartTime": st.column_config.TextColumn("Start Time"),
+                        "EndTime": st.column_config.TextColumn("End Time"),
                         "Location": st.column_config.TextColumn("Location"),
-                        "Status": st.column_config.SelectboxColumn("Status", options=EVENT_STATUS_OPTIONS, required=True),
-                        "Description": st.column_config.TextColumn("Description"),
-                        "RsvpLink": st.column_config.TextColumn("RSVP / Link")
+                        "Status": st.column_config.SelectboxColumn("Status", options=["Scheduled", "Completed", "Cancelled"]),
+                        "Notes": st.column_config.TextColumn("Notes")
                     }
+                    available_edit_cols = [c for c in disp_cols if c in editable_config]
 
                     edited_result = st.data_editor(
-                        editor_input_df,
-                        column_config=col_config,
+                        events_view_df[available_edit_cols],
+                        column_config={c: editable_config[c] for c in available_edit_cols},
                         disabled=not can_edit,
                         width="stretch",
                         hide_index=True,
@@ -396,7 +388,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                     if can_edit:
                         btn_col, _ = st.columns([1.5, 4.5])
                         with btn_col:
-                            if st.button("Save Event Edits", type="primary", use_container_width=True, key="btn_save_tbl_events"):
+                            if st.button("Save Event Edits", type="primary", width="stretch", key="btn_save_tbl_events"):
                                 # Merge edits back to master events file
                                 all_events_master = load_events(season=None, is_officer=is_officer)
                                 for _, e_row in edited_result.iterrows():
@@ -441,11 +433,11 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                             st.write("")
                             if sel_del_name:
                                 target_item = item_lookup[sel_del_name]
-                                with st.popover("Delete Item", use_container_width=True):
+                                with st.popover("Delete Item", width="stretch"):
                                     st.caption(f"Permanently delete {target_item['ItemType'].lower()} '{target_item['Title']}'?")
                                     if target_item["ItemType"] == "Trip":
                                         st.caption("This will also delete associated signups and attendee roster links.")
-                                    if st.button("Confirm Delete", key=f"btn_confirm_table_del_{target_item['ID']}", type="primary", use_container_width=True):
+                                    if st.button("Confirm Delete", key=f"btn_confirm_table_del_{target_item['ID']}", type="primary", width="stretch"):
                                         if target_item["ItemType"] == "Event":
                                             ok = delete_event(target_item["ID"], is_officer=is_officer)
                                         else:
@@ -508,16 +500,16 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                                 location=it["Location"],
                                 description=it["Description"]
                             )
-                            st.link_button("Add to Google Calendar", gcal_url, use_container_width=True, key=f"gcal_btn_{it['ID']}")
+                            st.link_button("Add to Google Calendar", gcal_url, width="stretch", key=f"gcal_btn_{it['ID']}")
 
                             if it["Location"]:
                                 maps_link = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(it['Location'])}"
-                                st.link_button("Google Maps", maps_link, use_container_width=True, key=f"maps_btn_{it['ID']}")
+                                st.link_button("Google Maps", maps_link, width="stretch", key=f"maps_btn_{it['ID']}")
 
                             if it["RsvpLink"]:
-                                st.link_button("RSVP / Sign Up", it["RsvpLink"], use_container_width=True, key=f"rsvp_btn_{it['ID']}")
+                                st.link_button("RSVP / Sign Up", it["RsvpLink"], width="stretch", key=f"rsvp_btn_{it['ID']}")
 
-                            with st.popover("Delete", use_container_width=True, help=f"Delete this {it['ItemType'].lower()}"):
+                            with st.popover("Delete", width="stretch", help=f"Delete this {it['ItemType'].lower()}"):
                                 if not can_edit:
                                     st.info("Officer Editing Mode required to delete.")
                                 else:
@@ -525,7 +517,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                                     st.caption(f"Permanently delete {item_kind} '{it['Title']}'?")
                                     if it["ItemType"] == "Trip":
                                         st.caption("This will also remove associated signups and attendee roster links.")
-                                    if st.button("Confirm Delete", key=f"btn_del_timeline_{it['ItemType']}_{it['ID']}", type="primary", use_container_width=True):
+                                    if st.button("Confirm Delete", key=f"btn_del_timeline_{it['ItemType']}_{it['ID']}", type="primary", width="stretch"):
                                         if it["ItemType"] == "Event":
                                             del_ok = delete_event(it["ID"], is_officer=is_officer)
                                         else:
@@ -595,7 +587,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
         with c_prev:
             st.write("")
             st.write("")
-            st.button("< Prev", key="btn_prev_month", on_click=_on_prev_click, use_container_width=True)
+            st.button("< Prev", key="btn_prev_month", on_click=_on_prev_click, width="stretch")
 
         with c_m_sel:
             st.selectbox("Month", month_names, key="sb_cal_month")
@@ -609,12 +601,12 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
         with c_next:
             st.write("")
             st.write("")
-            st.button("Next >", key="btn_next_month", on_click=_on_next_click, use_container_width=True)
+            st.button("Next >", key="btn_next_month", on_click=_on_next_click, width="stretch")
 
         with c_today:
             st.write("")
             st.write("")
-            st.button("Today", key="btn_today_month", on_click=_on_today_click, use_container_width=True)
+            st.button("Today", key="btn_today_month", on_click=_on_today_click, width="stretch")
 
         month_label = st.session_state["sb_cal_month"]
         cal_year = st.session_state["sb_cal_year"]
@@ -741,10 +733,10 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
                             location=it["Location"],
                             description=it["Description"]
                         )
-                        st.link_button("Add to Google Calendar", gcal_url, use_container_width=True, key=f"month_gcal_{it['ID']}")
+                        st.link_button("Add to Google Calendar", gcal_url, width="stretch", key=f"month_gcal_{it['ID']}")
                         if it["Location"]:
                             maps_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(it['Location'])}"
-                            st.link_button("Google Maps", maps_url, use_container_width=True, key=f"month_maps_{it['ID']}")
+                            st.link_button("Google Maps", maps_url, width="stretch", key=f"month_maps_{it['ID']}")
                     st.divider()
 
     # =========================================================================
@@ -884,7 +876,7 @@ def render_calendar_tab(selected_season: str = CURRENT_SEASON, is_officer: bool 
             submit_event = st.button(
                 "Save Event to Schedule",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=not can_edit,
                 key="btn_save_event"
             )

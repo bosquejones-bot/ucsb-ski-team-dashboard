@@ -60,7 +60,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                 notes = st.text_input("Notes / Description", placeholder="e.g. Mammoth trip cabin deposit, team snacks")
 
                 target_entry_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-                submit_button = st.form_submit_button("Record Transaction", use_container_width=True)
+                submit_button = st.form_submit_button("Record Transaction", width="stretch")
 
                 if submit_button:
                     if not entity.strip():
@@ -114,7 +114,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                 )
                 mode_val = "replace" if "Replace" in sync_mode else "append"
 
-                if st.button("Sync Ledger from Google Sheet", use_container_width=True):
+                if st.button("Sync Ledger from Google Sheet", width="stretch"):
                     if not sheet_url_input.strip():
                         st.error("Please enter a valid Google Sheet URL or ID.")
                     else:
@@ -141,7 +141,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                 mode_upload_val = "replace" if "Replace" in upload_mode else "append"
 
                 if uploaded_csv is not None:
-                    if st.button("Import Uploaded CSV into Master Ledger", use_container_width=True):
+                    if st.button("Import Uploaded CSV into Master Ledger", width="stretch"):
                         try:
                             df_uploaded = pd.read_csv(uploaded_csv)
                             with st.spinner("Processing and validating transactions..."):
@@ -169,7 +169,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                     data=master_csv_bytes,
                     file_name=f"ucsb_ski_team_master_ledger_all_seasons_{date.today().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                     help="Export all records across all seasons to set up your Google Sheet or keep an offline backup."
                 )
 
@@ -334,7 +334,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                 data=csv_data,
                 file_name=f"ucsb_ski_team_ledger_{selected_season}_{date.today().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 help="Download currently filtered records for audit or quick inspection."
             )
         with dl_col2:
@@ -344,7 +344,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                 data=master_csv,
                 file_name=f"ucsb_ski_team_master_ledger_all_seasons_{date.today().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
                 help="Download complete historical master ledger across all seasons."
             )
 
@@ -378,7 +378,7 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
                         f"{target_trans['Type']} &bull; ${target_trans['Amount']:,.2f} &bull; {target_trans['Category']}"
                     )
 
-                    if st.button("Confirm Delete", type="primary", use_container_width=True):
+                    if st.button("Confirm Delete", type="primary", width="stretch"):
                         if delete_transaction(int(selected_del_row), is_officer=is_officer):
                             st.success(f"Row {selected_del_row} deleted successfully.")
                             st.rerun()

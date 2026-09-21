@@ -210,7 +210,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         with c_succ:
             st.success(f"Trip '{saved_name}' created successfully for season {saved_season}! Review your Google Form details and copy the pre-built Apps Script below.")
         with c_btn:
-            if st.button("Create Another Trip", key="btn_create_another", use_container_width=True):
+            if st.button("Create Another Trip", key="btn_create_another", width="stretch"):
                 st.session_state["trip_created_show_script"] = False
                 st.rerun()
 
@@ -466,7 +466,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                     placeholder="For choices, separate by slash: Option A / Option B",
                     key="new_f_detail"
                 )
-                if st.button("Add Field to Form", type="primary", key="btn_add_form_field", use_container_width=True):
+                if st.button("Add Field to Form", type="primary", key="btn_add_form_field", width="stretch"):
                     if new_f_name.strip():
                         st.session_state["trip_form_fields"].append({
                             "Field": new_f_name.strip(),
@@ -485,7 +485,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 curr_fields = [f.get("Field", "") for f in st.session_state["trip_form_fields"] if f.get("Field")]
                 if curr_fields:
                     f_to_del = st.selectbox("Select Field to Delete", curr_fields, key="sel_f_del")
-                    if st.button("Confirm Delete Field", type="primary", key="btn_del_field", use_container_width=True):
+                    if st.button("Confirm Delete Field", type="primary", key="btn_del_field", width="stretch"):
                         st.session_state["trip_form_fields"] = [
                             f for f in st.session_state["trip_form_fields"] if f.get("Field") != f_to_del
                         ]
@@ -495,13 +495,13 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                     st.info("No fields to remove.")
 
         with c_f_rst:
-            if st.button("Reset Defaults", help="Reset to standard 4 response fields", use_container_width=True, key="btn_reset_fields"):
+            if st.button("Reset Defaults", help="Reset to standard 4 response fields", width="stretch", key="btn_reset_fields"):
                 st.session_state["trip_form_fields"] = [dict(f) for f in default_form_fields]
                 st.success("Form fields reset to default.")
                 st.rerun()
 
         target_trip_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-        submit_trip = st.button("Save Trip & Generate Google Form", type="primary", use_container_width=True, key="btn_save_trip_gen")
+        submit_trip = st.button("Save Trip & Generate Google Form", type="primary", width="stretch", key="btn_save_trip_gen")
 
         if submit_trip:
             final_name = trip_name.strip() if trip_name.strip() else f"{final_destination} {trip_type} Trip"
@@ -750,7 +750,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                             placeholder="https://docs.google.com/spreadsheets/d/YOUR_TRIP_SHEET_ID/edit#gid=...",
                             key=f"ts_url_{selected_trip_id}"
                         )
-                        if st.button("Sync Sign-Up Responses from Sheet", key=f"btn_sync_{selected_trip_id}", use_container_width=True):
+                        if st.button("Sync Sign-Up Responses from Sheet", key=f"btn_sync_{selected_trip_id}", width="stretch"):
                             if not trip_sheet_url.strip():
                                 st.error("Please enter a valid Google Sheet URL.")
                             else:
@@ -771,7 +771,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     with tab_s_upload:
                         trip_csv_file = st.file_uploader(f"Upload Responses CSV for {selected_trip_row['Name']}", type=["csv"], key=f"trip_csv_{selected_trip_id}")
                         if trip_csv_file is not None:
-                            if st.button("Import Uploaded CSV", key=f"btn_csv_{selected_trip_id}", use_container_width=True):
+                            if st.button("Import Uploaded CSV", key=f"btn_csv_{selected_trip_id}", width="stretch"):
                                 try:
                                     df_uploaded_trip = pd.read_csv(trip_csv_file)
                                     success, msg, count = parse_and_sync_trip_form_df(
@@ -844,7 +844,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
                                     att_questions = st.text_input("Questions or Concerns?", placeholder="e.g. Vegetarian meal request, snowboard rack, leaving IV Friday 4 PM")
 
-                                    submit_att = st.form_submit_button(f"Save {chosen_member} to Trip Roster", use_container_width=True)
+                                    submit_att = st.form_submit_button(f"Save {chosen_member} to Trip Roster", width="stretch")
                                     if submit_att:
                                         final_phone = att_phone.strip() if att_phone.strip() else default_phone
                                         ok = add_trip_attendee(

@@ -472,7 +472,10 @@ st.markdown("""
 
     /* Hide the 0-height component iframe container */
     iframe[height="0"],
-    div[data-testid="stCustomComponentV1"]:has(> iframe[height="0"]) {
+    iframe[height="1"],
+    div[data-testid="stCustomComponentV1"]:has(> iframe[height="0"]),
+    div[data-testid="stIFrame"]:has(> iframe[height="1"]),
+    div[data-testid="stIFrame"] {
         display: none !important;
         position: absolute !important;
         height: 0px !important;
@@ -482,7 +485,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Injected client-side script to enforce readonly and intercept typing on all dropdown inputs
-components.html("""
+_dropdown_lock_code = """
 <script>
 (function() {
     function getParentDoc() {
@@ -586,7 +589,12 @@ components.html("""
     }
 })();
 </script>
-""", height=0, width=0)
+"""
+
+if hasattr(st, "iframe"):
+    st.iframe(_dropdown_lock_code, height=1)
+else:
+    components.html(_dropdown_lock_code, height=0, width=0)
 
 
 def main():
@@ -596,7 +604,7 @@ def main():
     with st.sidebar:
         logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.jpg")
         if os.path.exists(logo_path):
-            st.image(logo_path, use_container_width=True)
+            st.image(logo_path, width="stretch")
 
         st.markdown("### UCSB Ski Team")
         st.caption("Operations and Treasury Portal")
@@ -630,7 +638,7 @@ def main():
                 st.caption("Enter officer passcode to view live UCSB Ski Team data, log receipts, or create trips:")
                 with st.form("officer_login_form", clear_on_submit=False, border=False, enter_to_submit=True):
                     code_input = st.text_input("Officer Passcode", type="password", placeholder="Enter passcode", key="officer_passcode_input")
-                    submit_login = st.form_submit_button("Unlock Live Data & Editing", use_container_width=True, type="primary")
+                    submit_login = st.form_submit_button("Unlock Live Data & Editing", width="stretch", type="primary")
                     if submit_login:
                         if code_input.strip() == OFFICER_PASSWORD:
                             st.session_state["is_officer"] = True
@@ -659,7 +667,7 @@ def main():
             else:
                 st.caption("Current State: **Viewing Only** (Modifications locked)")
 
-            if st.button("Lock / Switch to View-Only Demo", use_container_width=True, key="btn_lock_officer"):
+            if st.button("Lock / Switch to View-Only Demo", width="stretch", key="btn_lock_officer"):
                 st.session_state["is_officer"] = False
                 st.session_state["officer_editing"] = False
                 st.rerun()

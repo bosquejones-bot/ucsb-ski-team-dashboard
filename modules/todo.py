@@ -41,7 +41,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
                 st.markdown("###### Add New Officer")
                 with st.form("form_add_officer", clear_on_submit=True):
                     new_officer_name = st.text_input("Officer Name or Role", placeholder="e.g. Taylor Smith, Safety Officer")
-                    submit_add_off = st.form_submit_button("Add Officer", use_container_width=True)
+                    submit_add_off = st.form_submit_button("Add Officer", width="stretch")
                     if submit_add_off:
                         if not new_officer_name.strip():
                             st.error("Please enter an officer name.")
@@ -57,7 +57,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
                 st.markdown("###### Remove Existing Officer")
                 with st.form("form_delete_officer"):
                     officer_to_remove = st.selectbox("Select Officer to Remove", options=officers_pool)
-                    submit_del_off = st.form_submit_button("Remove Officer", type="primary", use_container_width=True)
+                    submit_del_off = st.form_submit_button("Remove Officer", type="primary", width="stretch")
                     if submit_del_off:
                         ok, msg = delete_officer(officer_to_remove, is_officer=is_officer)
                         if ok:
@@ -69,27 +69,19 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
     # --- CREATE NEW TASK FORM ---
     with st.expander("Create New Officer Task", expanded=False):
         if not is_officer:
-            st.info("Officer access required to create tasks. Enter the officer password in the sidebar to unlock.")
+            st.info("Officer access required to assign new tasks. Enter the officer password in the sidebar to unlock.")
         elif not can_edit:
-            st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to create new tasks.")
+            st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to assign new tasks.")
         else:
-            with st.form("new_task_form", clear_on_submit=True):
-                st.markdown("##### Task Specifications")
-                t1, t2 = st.columns([2, 1])
-                with t1:
-                    title = st.text_input("Task Title", placeholder="e.g. Confirm lodging reservations for MLK trip")
-                with t2:
-                    target_date = st.date_input("Target Completion Date", value=date.today())
+            with st.form("form_new_todo", clear_on_submit=True):
+                title = st.text_input("Task Title", placeholder="e.g. Confirm cabin booking at Mammoth, Order race bibs")
+                description = st.text_area("Task Description & Deliverables", placeholder="Provide relevant details, vendor links, confirmation numbers, or requirements...")
 
-                description = st.text_area("Task Description & Details", placeholder="Detailed instructions, links, or expectations for the assigned officers...")
-
-                st.markdown("##### Assigned Officers (Multiple Selection Allowed)")
-                assigned_officers = st.multiselect(
-                    "Select Responsible Officers",
-                    options=officers_pool,
-                    default=[],
-                    help="Pick one or multiple officers responsible for this action item."
-                )
+                c_off1, c_off2 = st.columns(2)
+                with c_off1:
+                    assigned_officers = st.multiselect("Assign Officer(s)", options=officers_pool)
+                with c_off2:
+                    target_date = st.date_input("Target Completion Date", value=date.today() + timedelta(days=7))
 
                 c_sub1, c_sub2 = st.columns(2)
                 with c_sub1:
@@ -98,7 +90,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
                     notes = st.text_input("Additional Notes / Priority", placeholder="e.g. High priority, budget deadline next week")
 
                 target_todo_season = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-                submit_task = st.form_submit_button("Assign Task", use_container_width=True)
+                submit_task = st.form_submit_button("Assign Task", width="stretch")
 
                 if submit_task:
                     if not title.strip():
@@ -169,7 +161,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
                     with c_action:
                         st.write("")
                         st.write("")
-                        if st.button("Mark Completed", key=f"btn_done_{task['TaskID']}", type="primary", use_container_width=True, disabled=not (is_officer and can_edit), help=None if (is_officer and can_edit) else ("Officer editing mode is disabled. Toggle 'Enable Editing Mode' in the sidebar." if is_officer else "Officer access required to complete tasks")):
+                        if st.button("Mark Completed", key=f"btn_done_{task['TaskID']}", type="primary", width="stretch", disabled=not (is_officer and can_edit), help=None if (is_officer and can_edit) else ("Officer editing mode is disabled. Toggle 'Enable Editing Mode' in the sidebar." if is_officer else "Officer access required to complete tasks")):
                             if set_todo_status(task['TaskID'], "Completed", is_officer=is_officer):
                                 st.success(f"Task '{task['Title']}' moved to Completed Archive.")
                                 st.rerun()
@@ -220,7 +212,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
                             st.caption(task['Description'])
                     with c_c2:
                         st.write("")
-                        if st.button("Re-open Task", key=f"reopen_{task['TaskID']}", use_container_width=True, disabled=not (is_officer and can_edit), help=None if (is_officer and can_edit) else ("Officer editing mode is disabled. Toggle 'Enable Editing Mode' in the sidebar." if is_officer else "Officer access required to re-open tasks")):
+                        if st.button("Re-open Task", key=f"reopen_{task['TaskID']}", width="stretch", disabled=not (is_officer and can_edit), help=None if (is_officer and can_edit) else ("Officer editing mode is disabled. Toggle 'Enable Editing Mode' in the sidebar." if is_officer else "Officer access required to re-open tasks")):
                             if set_todo_status(task['TaskID'], "Pending", is_officer=is_officer):
                                 st.success("Task re-opened and moved to active list.")
                                 st.rerun()
