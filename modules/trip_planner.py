@@ -11,15 +11,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta
 from utils.data_manager import load_trips, add_trip, get_cost_benchmarks
-from config import DESTINATIONS, DEFAULT_MPG, DEFAULT_GAS_PRICE, DEFAULT_SEATS_PER_CAR, THEME_COLORS
+from config import DESTINATIONS, DEFAULT_MPG, DEFAULT_GAS_PRICE, DEFAULT_SEATS_PER_CAR, THEME_COLORS, CURRENT_SEASON
 
 
-def render_trip_planner_tab():
+def render_trip_planner_tab(is_officer: bool = False):
     st.markdown("## Trip Planning and Budget Estimator")
     st.markdown("Calculate accurate trip budgets from **UCSB**, forecast per-skier costs, and leverage historical cost data from previous trips.")
 
-    benchmarks = get_cost_benchmarks()
-    trips_df = load_trips()
+    benchmarks = get_cost_benchmarks(is_officer=is_officer)
+    trips_df = load_trips(is_officer=is_officer)
 
     # --- HISTORICAL LEARNING BENCHMARKS BANNER ---
     with st.container():
@@ -232,7 +232,9 @@ def render_trip_planner_tab():
                 tickets=total_lift_tickets_cost,
                 gas=total_gas_cost,
                 status="Planning",
-                notes=f"Passholder price: ${break_even_passholder:.0f}, Non-passholder: ${break_even_non_passholder:.0f}"
+                notes=f"Passholder price: ${break_even_passholder:.0f}, Non-passholder: ${break_even_non_passholder:.0f}",
+                season=CURRENT_SEASON,
+                is_officer=is_officer
             )
             if success:
                 st.success(f"Trip '{trip_name}' has been saved to the database. Future trip benchmarks updated.")

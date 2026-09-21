@@ -80,6 +80,25 @@ def get_events_file(is_officer: bool = False) -> str:
     return EVENTS_FILE if is_officer else DEMO_EVENTS_FILE
 
 
+TRIP_COLS = [
+    "TripID", "Season", "Name", "Destination", "TripType", "StartDate", "EndDate",
+    "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+    "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
+    "RevenueCollected", "Status", "AttendeeRoster", "Notes",
+    "SchoolFunding", "NetCost", "SchoolCoverageDetails"
+]
+
+TODO_COLS = [
+    "TaskID", "Season", "Title", "Description", "AssignedTo",
+    "SubmittedDate", "TargetDate", "Status", "CompletedDate", "Notes"
+]
+
+SIGNUP_COLS = [
+    "SignupID", "TripID", "TripName", "Season", "Name", "Phone",
+    "DrivingCapacity", "Questions", "PaymentReceived", "SignupDate"
+]
+
+
 # --- GOOGLE SHEETS CLOUD CONNECTION (OPTION 1A) ---
 
 def get_gsheets_connection():
@@ -1008,9 +1027,13 @@ def save_ledger(df: pd.DataFrame, is_officer: bool = False):
     cols = ["Date", "Entity", "Amount", "Category", "Notes", "Type", "Season", "LoggedBy"]
     save_df = df[[c for c in cols if c in df.columns]].copy()
     save_df.to_csv(get_ledger_file(is_officer), index=False)
+    try:
+        save_df.to_csv(LEDGER_FILE, index=False)
+    except Exception:
+        pass
 
     sheet_url = getattr(config, "LEDGER_SHEET_URL", "") or DEFAULT_LEDGER_SHEET_URL
-    if is_officer and sheet_url:
+    if sheet_url:
         ok = write_gsheet_worksheet(sheet_url, "Ledger", save_df)
         if not ok:
             write_gsheet_worksheet(sheet_url, 0, save_df)
@@ -1216,10 +1239,8 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
     target_file = get_members_file(is_officer)
     sheet_url = getattr(config, "MEMBERS_SHEET_URL", "") or DEFAULT_MEMBERSHIP_FORM_SHEET_URL
 
-    if is_officer and sheet_url:
+    if sheet_url:
         gs_df = read_gsheet_worksheet(sheet_url, "Members", ttl=60)
-        if gs_df is None or gs_df.empty or "Name" not in gs_df.columns:
-            gs_df = read_gsheet_worksheet(sheet_url, 0, ttl=60)
         if gs_df is not None and not gs_df.empty and "Name" in gs_df.columns:
             try:
                 gs_df.to_csv(MEMBERS_FILE, index=False)
@@ -1227,7 +1248,8 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
                 pass
             df = gs_df
         else:
-            df = pd.read_csv(target_file)
+            target_path = MEMBERS_FILE if (os.path.exists(MEMBERS_FILE) and (is_officer or sheet_url)) else target_file
+            df = pd.read_csv(target_path)
     else:
         df = pd.read_csv(target_file)
 
@@ -1293,11 +1315,13 @@ def save_members(df: pd.DataFrame, is_officer: bool = False):
     if "PassType" in df.columns:
         df = df.drop(columns=["PassType"])
     df.to_csv(get_members_file(is_officer), index=False)
+    try:
+        df.to_csv(MEMBERS_FILE, index=False)
+    except Exception:
+        pass
     sheet_url = getattr(config, "MEMBERS_SHEET_URL", "") or DEFAULT_MEMBERSHIP_FORM_SHEET_URL
-    if is_officer and sheet_url:
-        ok = write_gsheet_worksheet(sheet_url, "Members", df)
-        if not ok:
-            write_gsheet_worksheet(sheet_url, 0, df)
+    if sheet_url:
+        write_gsheet_worksheet(sheet_url, "Members", df)
 
 
 def record_dues_payment_in_ledger(member_name: str, season: str = CURRENT_SEASON, notes: str = None, is_officer: bool = False) -> bool:
@@ -1848,7 +1872,8 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
     target_file = get_trips_file(is_officer)
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
 
-    if is_officer and sheet_url:
+    df = None
+    if sheet_url:
         gs_df = read_gsheet_worksheet(sheet_url, "Trips", ttl=60)
         if gs_df is not None and not gs_df.empty and "Name" in gs_df.columns:
             try:
@@ -1856,10 +1881,13 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             except Exception:
                 pass
             df = gs_df
+
+    if df is None or df.empty:
+        target_path = TRIPS_FILE if (os.path.exists(TRIPS_FILE) and (is_officer or sheet_url)) else target_file
+        if os.path.exists(target_path):
+            df = pd.read_csv(target_path)
         else:
-            df = pd.read_csv(target_file)
-    else:
-        df = pd.read_csv(target_file)
+            df = pd.DataFrame(columns=TRIP_COLS)
 
     try:
         if "Season" not in df.columns:
@@ -1886,15 +1914,21 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
         return df
     except Exception as e:
         print(f"Error loading trips: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=TRIP_COLS)
 
 
 def save_trips(df: pd.DataFrame, is_officer: bool = False):
     """Save trips dataset to CSV and Google Sheets."""
-    df.to_csv(get_trips_file(is_officer), index=False)
+    save_cols = [c for c in TRIP_COLS if c in df.columns]
+    save_df = df[save_cols].copy() if save_cols else df.copy()
+    save_df.to_csv(get_trips_file(is_officer), index=False)
+    try:
+        save_df.to_csv(TRIPS_FILE, index=False)
+    except Exception:
+        pass
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
-    if is_officer and sheet_url:
-        write_gsheet_worksheet(sheet_url, "Trips", df)
+    if sheet_url:
+        write_gsheet_worksheet(sheet_url, "Trips", save_df)
 
 
 def add_created_trip(name: str, destination: str, trip_type: str, start_date: str, end_date: str,
@@ -1991,8 +2025,7 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
 
         # Directly update attendee members' TripsAttended in members file for actual_season
         if attendee_roster:
-            members_file = get_members_file(is_officer)
-            members_df = pd.read_csv(members_file)
+            members_df = load_members(season=None, is_officer=is_officer)
             if "TripsAttended" in members_df.columns:
                 m_changed = False
                 for m_name in attendee_roster:
@@ -2010,7 +2043,7 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                             members_df.at[m_idx, "TripsAttended"] = ", ".join(t_list)
                             m_changed = True
                 if m_changed:
-                    members_df.to_csv(members_file, index=False)
+                    save_members(members_df, is_officer=is_officer)
 
         return True
     except Exception as e:
@@ -2061,8 +2094,7 @@ def delete_trip(trip_id: str, is_officer: bool = False) -> bool:
                 remove_trip_from_member_history(m_name, trip_name, trip_season, is_officer=is_officer)
 
             # 4. Extra safety pass across members file for this season to remove deleted trip
-            members_file = get_members_file(is_officer)
-            members_df = pd.read_csv(members_file)
+            members_df = load_members(season=None, is_officer=is_officer)
             if "TripsAttended" in members_df.columns:
                 m_changed = False
                 for m_idx, m_row in members_df.iterrows():
@@ -2075,7 +2107,7 @@ def delete_trip(trip_id: str, is_officer: bool = False) -> bool:
                             members_df.at[m_idx, "TripsAttended"] = ", ".join(new_t_list)
                             m_changed = True
                 if m_changed:
-                    members_df.to_csv(members_file, index=False)
+                    save_members(members_df, is_officer=is_officer)
 
             return True
         return False
@@ -2235,7 +2267,8 @@ def load_trip_signups(trip_id_or_name: str = None, season: str = CURRENT_SEASON,
     target_file = get_trip_signups_file(is_officer)
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
 
-    if is_officer and sheet_url:
+    df = None
+    if sheet_url:
         gs_df = read_gsheet_worksheet(sheet_url, "Signups", ttl=60)
         if gs_df is not None and not gs_df.empty and "Name" in gs_df.columns:
             try:
@@ -2243,10 +2276,13 @@ def load_trip_signups(trip_id_or_name: str = None, season: str = CURRENT_SEASON,
             except Exception:
                 pass
             df = gs_df
+
+    if df is None or df.empty:
+        target_path = TRIP_SIGNUPS_FILE if (os.path.exists(TRIP_SIGNUPS_FILE) and (is_officer or sheet_url)) else target_file
+        if os.path.exists(target_path):
+            df = pd.read_csv(target_path)
         else:
-            df = pd.read_csv(target_file)
-    else:
-        df = pd.read_csv(target_file)
+            df = pd.DataFrame(columns=SIGNUP_COLS)
 
     try:
         if "PaymentReceived" not in df.columns:
@@ -2264,15 +2300,21 @@ def load_trip_signups(trip_id_or_name: str = None, season: str = CURRENT_SEASON,
         return df.copy().reset_index(drop=True)
     except Exception as e:
         print(f"Error loading trip signups: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=SIGNUP_COLS)
 
 
 def save_trip_signups(df: pd.DataFrame, is_officer: bool = False):
     """Save trip signups dataset to CSV and Google Sheets."""
-    df.to_csv(get_trip_signups_file(is_officer), index=False)
+    save_cols = [c for c in SIGNUP_COLS if c in df.columns]
+    save_df = df[save_cols].copy() if save_cols else df.copy()
+    save_df.to_csv(get_trip_signups_file(is_officer), index=False)
+    try:
+        save_df.to_csv(TRIP_SIGNUPS_FILE, index=False)
+    except Exception:
+        pass
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
-    if is_officer and sheet_url:
-        write_gsheet_worksheet(sheet_url, "Signups", df)
+    if sheet_url:
+        write_gsheet_worksheet(sheet_url, "Signups", save_df)
 
 
 def record_trip_payment_in_ledger(athlete_name: str, trip_name: str, trip_id: str = None,
@@ -2792,7 +2834,8 @@ def load_todos(season: str = None, status: str = None, is_officer: bool = False)
     target_file = get_todos_file(is_officer)
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
 
-    if is_officer and sheet_url:
+    df = None
+    if sheet_url:
         gs_df = read_gsheet_worksheet(sheet_url, "Todos", ttl=60)
         if gs_df is not None and not gs_df.empty and "Title" in gs_df.columns:
             try:
@@ -2800,10 +2843,13 @@ def load_todos(season: str = None, status: str = None, is_officer: bool = False)
             except Exception:
                 pass
             df = gs_df
+
+    if df is None or df.empty:
+        target_path = TODOS_FILE if (os.path.exists(TODOS_FILE) and (is_officer or sheet_url)) else target_file
+        if os.path.exists(target_path):
+            df = pd.read_csv(target_path)
         else:
-            df = pd.read_csv(target_file)
-    else:
-        df = pd.read_csv(target_file)
+            df = pd.DataFrame(columns=TODO_COLS)
 
     try:
         if "Season" not in df.columns:
@@ -2815,15 +2861,21 @@ def load_todos(season: str = None, status: str = None, is_officer: bool = False)
         return df.copy().reset_index(drop=True)
     except Exception as e:
         print(f"Error loading todos: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=TODO_COLS)
 
 
 def save_todos(df: pd.DataFrame, is_officer: bool = False):
     """Save todos dataset to CSV and Google Sheets."""
-    df.to_csv(get_todos_file(is_officer), index=False)
+    save_cols = [c for c in TODO_COLS if c in df.columns]
+    save_df = df[save_cols].copy() if save_cols else df.copy()
+    save_df.to_csv(get_todos_file(is_officer), index=False)
+    try:
+        save_df.to_csv(TODOS_FILE, index=False)
+    except Exception:
+        pass
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
-    if is_officer and sheet_url:
-        write_gsheet_worksheet(sheet_url, "Todos", df)
+    if sheet_url:
+        write_gsheet_worksheet(sheet_url, "Todos", save_df)
 
 
 def add_todo(title: str, description: str, assigned_to_list: list, target_date: str,
@@ -3079,7 +3131,8 @@ def load_events(season: str = None, is_officer: bool = False) -> pd.DataFrame:
     target_file = get_events_file(is_officer)
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
 
-    if is_officer and sheet_url:
+    df = None
+    if sheet_url:
         gs_df = read_gsheet_worksheet(sheet_url, "Events", ttl=60)
         if gs_df is not None and not gs_df.empty and "Title" in gs_df.columns:
             try:
@@ -3087,10 +3140,13 @@ def load_events(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             except Exception:
                 pass
             df = gs_df
+
+    if df is None or df.empty:
+        target_path = EVENTS_FILE if (os.path.exists(EVENTS_FILE) and (is_officer or sheet_url)) else target_file
+        if os.path.exists(target_path):
+            df = pd.read_csv(target_path)
         else:
-            df = pd.read_csv(target_file)
-    else:
-        df = pd.read_csv(target_file)
+            df = pd.DataFrame(columns=EVENT_COLS)
 
     try:
         for col in EVENT_COLS:
@@ -3115,8 +3171,12 @@ def save_events(df: pd.DataFrame, is_officer: bool = False):
     save_cols = [c for c in EVENT_COLS if c in df.columns]
     save_df = df[save_cols].copy()
     save_df.to_csv(get_events_file(is_officer), index=False)
+    try:
+        save_df.to_csv(EVENTS_FILE, index=False)
+    except Exception:
+        pass
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
-    if is_officer and sheet_url:
+    if sheet_url:
         write_gsheet_worksheet(sheet_url, "Events", save_df)
 
 
