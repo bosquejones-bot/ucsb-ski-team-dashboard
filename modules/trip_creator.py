@@ -1057,7 +1057,26 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                             st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to remove attendees.")
                         else:
                             st.markdown("**Remove Trip Attendees**")
-                            att_remove_map = {f"{r['Name']} ({r['SignupID']})": r['SignupID'] for _, r in filtered_signups.iterrows()}
+                            att_remove_map = {}
+                            seen_names = set()
+                            if not signups_df.empty:
+                                for _, r in signups_df.iterrows():
+                                    s_name = str(r.get("Name", "")).strip()
+                                    s_id = str(r.get("SignupID", "")).strip()
+                                    if s_name:
+                                        att_remove_map[f"{s_name} ({s_id})"] = {"signup_id": s_id, "name": s_name}
+                                        seen_names.add(s_name.lower())
+
+                            # Also include athletes listed in AttendeeRoster who don't have a SignupID
+                            roster_str = str(selected_trip_row.get("AttendeeRoster", "")).strip()
+                            if roster_str and roster_str.lower() not in ["nan", "none", "0.0", "0"]:
+                                for r_name in roster_str.split(","):
+                                    c_name = r_name.strip()
+                                    if c_name and c_name.lower() not in ["nan", "none", "0.0", "0"]:
+                                        if c_name.lower() not in seen_names:
+                                            att_remove_map[f"{c_name} (Roster)"] = {"signup_id": None, "name": c_name}
+                                            seen_names.add(c_name.lower())
+
                             if att_remove_map:
                                 chosen_att_labels = st.multiselect(
                                     "Select Attendee(s) to Remove",
@@ -1068,8 +1087,14 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 if chosen_att_labels:
                                     st.caption(f"Selected **{len(chosen_att_labels)}** attendee(s) for removal.")
                                     if st.button(f"Confirm Remove ({len(chosen_att_labels)})", type="primary", key=f"btn_confirm_rem_{selected_trip_id}"):
-                                        rem_ids = [att_remove_map[label] for label in chosen_att_labels]
-                                        removed_count = delete_multiple_trip_attendees(rem_ids, is_officer=is_officer)
+                                        rem_items = [att_remove_map[label] for label in chosen_att_labels]
+                                        removed_count = delete_multiple_trip_attendees(
+                                            rem_items,
+                                            trip_id=selected_trip_id,
+                                            trip_name=selected_trip_row["Name"],
+                                            season=selected_trip_row.get("Season"),
+                                            is_officer=is_officer
+                                        )
                                         if removed_count > 0:
                                             st.success(f"Removed {removed_count} attendee(s) from {selected_trip_row['Name']}.")
                                             st.rerun()

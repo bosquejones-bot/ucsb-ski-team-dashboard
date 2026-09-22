@@ -1140,12 +1140,23 @@ def delete_transaction(index: int, is_officer: bool = False) -> bool:
 
 # --- MEMBER OPERATIONS (EDITABLE IN-TABLE CHECKBOXES & NOTES) ---
 
+def _is_truthy(val) -> bool:
+    """Safely check boolean truthiness across bool, float, int, and string representations."""
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        return not np.isnan(val) and val != 0
+    s = str(val).strip().lower()
+    return s in ["true", "1", "1.0", "yes", "y", "t"]
+
+
 def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) -> tuple[pd.DataFrame, bool]:
     """
     Reconciles members' TripsAttended with actual records from trip_signups.csv and trips.csv.
     Ensures that any member signed up for a trip or listed in a trip roster has that trip
-    logged in TripsAttended for their corresponding season, while filtering out cross-season mismatches
-    and removing any tracked trips the member is no longer registered for.
+    logged in TripsAttended for their corresponding season, while filtering out cross-season mismatches,
+    removing any trips that have been deleted, and removing any tracked trips the member is no longer registered for.
+    Also purges any orphaned signups in trip_signups.csv whose trip was deleted.
     """
     try:
         if df.empty or "Name" not in df.columns:
@@ -1156,22 +1167,45 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
         trips_df = pd.read_csv(trips_path) if os.path.exists(trips_path) else pd.DataFrame()
         signups_df = pd.read_csv(signups_path) if os.path.exists(signups_path) else pd.DataFrame()
 
+        # 1. Clean up orphaned signups from deleted trips in signups_df
+        valid_trip_ids: set[str] = set()
+        valid_trip_names_lower: set[str] = set()
+        if not trips_df.empty:
+            if "TripID" in trips_df.columns:
+                valid_trip_ids = {str(x).strip() for x in trips_df["TripID"].dropna() if str(x).strip() and str(x).strip().lower() not in ["nan", "none", "0.0", "0"]}
+            if "Name" in trips_df.columns:
+                valid_trip_names_lower = {str(x).strip().lower() for x in trips_df["Name"].dropna() if str(x).strip() and str(x).strip().lower() not in ["nan", "none", "0.0", "0"]}
+
+        if not signups_df.empty and (valid_trip_ids or valid_trip_names_lower):
+            s_tid = signups_df["TripID"].astype(str).str.strip() if "TripID" in signups_df.columns else pd.Series([""] * len(signups_df))
+            s_tname = signups_df["TripName"].astype(str).str.strip().str.lower() if "TripName" in signups_df.columns else pd.Series([""] * len(signups_df))
+            is_valid_signup = s_tid.isin(valid_trip_ids) | s_tname.isin(valid_trip_names_lower)
+            if not is_valid_signup.all():
+                signups_df = signups_df[is_valid_signup].copy().reset_index(drop=True)
+                save_trip_signups(signups_df, is_officer=is_officer)
+
+        # 2. Build authoritative trip metadata and attendee roster mapping
         trip_name_to_season: dict[str, str] = {}
+        trip_canonical_names: dict[str, str] = {}
         trip_tracked_attendees: dict[str, set[str]] = {}
+        seasons_with_trips: set[str] = set()
 
         if not trips_df.empty and "Name" in trips_df.columns:
             for _, t_row in trips_df.iterrows():
                 t_name = str(t_row.get("Name", "")).strip()
                 t_s = str(t_row.get("Season", "")).strip()
-                if t_name:
+                if t_name and t_name.lower() not in ["nan", "none", "0.0", "0"]:
                     t_lower = t_name.lower()
-                    if t_s:
+                    trip_canonical_names[t_lower] = t_name
+                    if t_s and t_s.lower() not in ["nan", "none"]:
                         trip_name_to_season[t_lower] = t_s
+                        seasons_with_trips.add(t_s)
+                    if t_lower not in trip_tracked_attendees:
+                        trip_tracked_attendees[t_lower] = set()
+
                     roster_raw = str(t_row.get("AttendeeRoster", "")).strip()
-                    if roster_raw and roster_raw.lower() not in ["nan", "none"]:
-                        names = {n.strip().lower() for n in roster_raw.split(",") if n.strip()}
-                        if t_lower not in trip_tracked_attendees:
-                            trip_tracked_attendees[t_lower] = set()
+                    if roster_raw and roster_raw.lower() not in ["nan", "none", "0.0", "0"]:
+                        names = {n.strip().lower() for n in roster_raw.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]}
                         trip_tracked_attendees[t_lower].update(names)
 
         if not signups_df.empty and "TripName" in signups_df.columns:
@@ -1179,67 +1213,69 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
                 t_name = str(s_row.get("TripName", "")).strip()
                 t_s = str(s_row.get("Season", "")).strip()
                 m_s_name = str(s_row.get("Name", "")).strip().lower()
-                if t_name:
+                if t_name and t_name.lower() not in ["nan", "none", "0.0", "0"]:
                     t_lower = t_name.lower()
-                    if t_s and t_lower not in trip_name_to_season:
+                    if t_lower not in trip_canonical_names:
+                        trip_canonical_names[t_lower] = t_name
+                    if t_s and t_s.lower() not in ["nan", "none"] and t_lower not in trip_name_to_season:
                         trip_name_to_season[t_lower] = t_s
-                    if m_s_name and m_s_name not in ["nan", "none"]:
-                        if t_lower not in trip_tracked_attendees:
-                            trip_tracked_attendees[t_lower] = set()
+                    if t_lower not in trip_tracked_attendees:
+                        trip_tracked_attendees[t_lower] = set()
+                    if m_s_name and m_s_name not in ["nan", "none", "0.0", "0"]:
                         trip_tracked_attendees[t_lower].add(m_s_name)
 
         changed = False
 
+        # 3. Reconcile each member's TripsAttended against active trips and rosters
         for idx, row in df.iterrows():
             m_name = str(row.get("Name", "")).strip().lower()
-            if not m_name or m_name == "nan":
+            if not m_name or m_name in ["nan", "none"]:
                 continue
             m_season = str(row.get("Season", "")).strip()
             curr_raw = str(row.get("TripsAttended", "")).strip()
-            if curr_raw.lower() in ["nan", "none"]:
+            if curr_raw.lower() in ["nan", "none", "0.0", "0"]:
                 curr_raw = ""
 
             existing_trips = []
             if curr_raw:
                 for t in curr_raw.split(","):
                     t_str = t.strip()
-                    if t_str:
-                        t_lower = t_str.lower()
-                        # Exclude trip if it's known to belong to a different season
-                        t_known_season = trip_name_to_season.get(t_lower)
-                        if t_known_season and m_season and t_known_season != m_season:
+                    if not t_str or t_str.lower() in ["nan", "none", "0.0", "0"]:
+                        continue
+                    t_lower = t_str.lower()
+
+                    # Exclude trip if it's known to belong to a different season
+                    t_known_season = trip_name_to_season.get(t_lower)
+                    if t_known_season and m_season and t_known_season != m_season:
+                        continue
+
+                    # If this member's season actively tracks trips in trips.csv:
+                    if m_season in seasons_with_trips:
+                        # If the trip is not in trips.csv, it has been DELETED -> remove it!
+                        if t_lower not in trip_canonical_names:
                             continue
-                        # If trip is actively tracked with a roster/signups, ensure member is actually on it
+                        # If the trip exists in trips.csv, verify member is actually on its roster/signups
+                        if m_name not in trip_tracked_attendees.get(t_lower, set()):
+                            continue
+                    else:
+                        # Historical season with no records in trips.csv:
+                        # If trip is actively tracked somewhere, ensure member is on it
                         if t_lower in trip_tracked_attendees:
                             if m_name not in trip_tracked_attendees[t_lower]:
                                 continue
+
+                    canonical_val = trip_canonical_names.get(t_lower, t_str)
+                    if not any(x.lower() == t_lower for x in existing_trips):
+                        existing_trips.append(canonical_val)
+
+            # Add any trips for this member's season where the member is listed as an attendee
+            for t_lower, attendees in trip_tracked_attendees.items():
+                if m_name in attendees:
+                    t_s = trip_name_to_season.get(t_lower, "")
+                    if not t_s or not m_season or t_s == m_season or m_season == "All Seasons":
+                        canonical_val = trip_canonical_names.get(t_lower, t_lower.title())
                         if not any(x.lower() == t_lower for x in existing_trips):
-                            existing_trips.append(t_str)
-
-            # Match signups for this member in this season
-            if not signups_df.empty and "Name" in signups_df.columns and "TripName" in signups_df.columns:
-                s_mask = signups_df["Name"].astype(str).str.lower().str.strip() == m_name
-                if m_season and m_season != "All Seasons" and "Season" in signups_df.columns:
-                    s_mask = s_mask & (signups_df["Season"] == m_season)
-                for t_name in signups_df.loc[s_mask, "TripName"].dropna().unique():
-                    t_clean = str(t_name).strip()
-                    if t_clean and not any(x.lower() == t_clean.lower() for x in existing_trips):
-                        existing_trips.append(t_clean)
-
-            # Match trips.csv AttendeeRoster for this season
-            if not trips_df.empty and "Name" in trips_df.columns:
-                t_mask = pd.Series(True, index=trips_df.index)
-                if m_season and m_season != "All Seasons" and "Season" in trips_df.columns:
-                    t_mask = trips_df["Season"] == m_season
-                if "AttendeeRoster" in trips_df.columns:
-                    for _, t_row in trips_df[t_mask].iterrows():
-                        roster_raw = str(t_row.get("AttendeeRoster", "")).strip()
-                        if roster_raw and roster_raw.lower() not in ["nan", "none"]:
-                            r_names = [n.strip().lower() for n in roster_raw.split(",") if n.strip()]
-                            if m_name in r_names:
-                                t_name = str(t_row.get("Name", "")).strip()
-                                if t_name and not any(x.lower() == t_name.lower() for x in existing_trips):
-                                    existing_trips.append(t_name)
+                            existing_trips.append(canonical_val)
 
             new_val = ", ".join(existing_trips)
             if new_val != curr_raw:
@@ -1475,17 +1511,34 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
             s = str(val).strip().lower()
             return s in ["true", "1", "yes", "y", "t"]
 
-        # Detect newly checked or unchecked Dues Paid boxes and update ledger
+        # Detect newly checked or unchecked Dues Paid boxes, and trip roster updates
         for mid, row in df_to_merge.iterrows():
             if mid in full_df.index:
-                was_paid = _to_bool(full_df.loc[mid, "DuesPaid"]) if "DuesPaid" in full_df.columns else False
-                now_paid = _to_bool(row.get("DuesPaid", False))
+                was_paid = _is_truthy(full_df.loc[mid, "DuesPaid"]) if "DuesPaid" in full_df.columns else False
+                now_paid = _is_truthy(row.get("DuesPaid", False))
                 athlete_name = str(row.get("Name", full_df.loc[mid, "Name"])).strip().title()
                 athlete_season = str(row.get("Season", full_df.loc[mid, "Season"])).strip()
                 if not was_paid and now_paid:
                     record_dues_payment_in_ledger(athlete_name, season=athlete_season, is_officer=is_officer)
                 elif was_paid and not now_paid:
                     remove_dues_payment_from_ledger(athlete_name, season=athlete_season, is_officer=is_officer)
+
+                # Detect changes in Trips Attended
+                if "TripsAttended" in row:
+                    old_raw = str(full_df.loc[mid, "TripsAttended"]) if "TripsAttended" in full_df.columns and pd.notnull(full_df.loc[mid, "TripsAttended"]) else ""
+                    new_raw = str(row["TripsAttended"]) if pd.notnull(row["TripsAttended"]) else ""
+                    if old_raw.lower() in ["nan", "none", "0.0", "0"]:
+                        old_raw = ""
+                    if new_raw.lower() in ["nan", "none", "0.0", "0"]:
+                        new_raw = ""
+                    old_trips = {t.strip() for t in old_raw.split(",") if t.strip() and t.strip().lower() not in ["nan", "none", "0.0", "0"]}
+                    new_trips = {t.strip() for t in new_raw.split(",") if t.strip() and t.strip().lower() not in ["nan", "none", "0.0", "0"]}
+                    removed_trips = {t for t in old_trips if not any(x.lower() == t.lower() for x in new_trips)}
+                    added_trips = {t for t in new_trips if not any(x.lower() == t.lower() for x in old_trips)}
+                    for rem_t in removed_trips:
+                        remove_trip_from_member_roster_and_signups(athlete_name, rem_t, season=athlete_season, is_officer=is_officer)
+                    for add_t in added_trips:
+                        add_trip_to_member_roster(athlete_name, add_t, season=athlete_season, is_officer=is_officer)
 
         for col in ["Name", "Email", "Phone", "Year", "SkiBoard", "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"]:
             if col in df_to_merge.columns:
@@ -1691,6 +1744,103 @@ def remove_trip_from_member_history(member_name: str, trip_name: str, season: st
         return True
     except Exception as e:
         print(f"Error removing trip from member history: {e}")
+        return False
+
+
+def remove_trip_from_member_roster_and_signups(athlete_name: str, trip_name: str, season: str = None, is_officer: bool = False) -> bool:
+    """
+    Remove athlete from a trip's AttendeeRoster in trips.csv and from trip_signups.csv,
+    and remove ledger trip payment if was recorded.
+    """
+    try:
+        clean_name = athlete_name.strip()
+        clean_trip = trip_name.strip()
+        if not clean_name or not clean_trip:
+            return False
+
+        # 1. Remove from trip_signups.csv
+        all_signups = load_trip_signups(season=None, is_officer=is_officer)
+        if not all_signups.empty:
+            s_mask = (all_signups["Name"].astype(str).str.lower().str.strip() == clean_name.lower()) & \
+                     (all_signups["TripName"].astype(str).str.lower().str.strip() == clean_trip.lower())
+            if season and season != "All Seasons":
+                s_mask = s_mask & (all_signups["Season"] == season)
+            match_rows = all_signups[s_mask]
+            if not match_rows.empty:
+                for _, row in match_rows.iterrows():
+                    was_paid = _is_truthy(row.get("PaymentReceived", False))
+                    s_season = str(row.get("Season", season or CURRENT_SEASON)).strip()
+                    if was_paid:
+                        remove_trip_payment_from_ledger(clean_name, clean_trip, s_season, is_officer=is_officer)
+                remaining_signups = all_signups[~s_mask].copy().reset_index(drop=True)
+                save_trip_signups(remaining_signups, is_officer=is_officer)
+
+        # 2. Remove from trips.csv AttendeeRoster
+        trips_df = load_trips(season=None, is_officer=is_officer)
+        if not trips_df.empty and "AttendeeRoster" in trips_df.columns:
+            t_mask = trips_df["Name"].astype(str).str.lower().str.strip() == clean_trip.lower()
+            if season and season != "All Seasons" and "Season" in trips_df.columns:
+                t_mask = t_mask & (trips_df["Season"] == season)
+            match_t_indices = trips_df[t_mask].index
+            trips_changed = False
+            for t_idx in match_t_indices:
+                curr_roster = str(trips_df.loc[t_idx, "AttendeeRoster"]).strip()
+                if curr_roster and curr_roster.lower() not in ["nan", "none", "0.0", "0"]:
+                    r_names = [n.strip() for n in curr_roster.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]]
+                    new_r = [n for n in r_names if n.lower() != clean_name.lower()]
+                    if len(new_r) != len(r_names):
+                        trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(new_r)
+                        if "Attendees" in trips_df.columns:
+                            try:
+                                trips_df.at[t_idx, "Attendees"] = max(0, len(new_r))
+                            except Exception:
+                                pass
+                        trips_changed = True
+            if trips_changed:
+                save_trips(trips_df, is_officer=is_officer)
+
+        return True
+    except Exception as e:
+        print(f"Error removing trip from member roster: {e}")
+        return False
+
+
+def add_trip_to_member_roster(athlete_name: str, trip_name: str, season: str = None, is_officer: bool = False) -> bool:
+    """
+    Add athlete to a trip's AttendeeRoster in trips.csv if trip exists.
+    """
+    try:
+        clean_name = athlete_name.strip()
+        clean_trip = trip_name.strip()
+        if not clean_name or not clean_trip:
+            return False
+
+        trips_df = load_trips(season=None, is_officer=is_officer)
+        if not trips_df.empty and "AttendeeRoster" in trips_df.columns:
+            t_mask = trips_df["Name"].astype(str).str.lower().str.strip() == clean_trip.lower()
+            if season and season != "All Seasons" and "Season" in trips_df.columns:
+                t_mask = t_mask & (trips_df["Season"] == season)
+            match_t_indices = trips_df[t_mask].index
+            trips_changed = False
+            for t_idx in match_t_indices:
+                curr_roster = str(trips_df.loc[t_idx, "AttendeeRoster"]).strip()
+                if curr_roster.lower() in ["nan", "none", "0.0", "0"]:
+                    curr_roster = ""
+                r_names = [n.strip() for n in curr_roster.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]]
+                if not any(n.lower() == clean_name.lower() for n in r_names):
+                    r_names.append(clean_name.title())
+                    trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(r_names)
+                    if "Attendees" in trips_df.columns:
+                        try:
+                            trips_df.at[t_idx, "Attendees"] = max(len(r_names), int(trips_df.loc[t_idx, "Attendees"]))
+                        except Exception:
+                            pass
+                    trips_changed = True
+            if trips_changed:
+                save_trips(trips_df, is_officer=is_officer)
+        return True
+    except Exception as e:
+        print(f"Error adding trip to member roster: {e}")
         return False
 
 
@@ -1934,6 +2084,8 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             df["TripType"] = "Recreational"
         if "AttendeeRoster" not in df.columns:
             df["AttendeeRoster"] = ""
+        else:
+            df["AttendeeRoster"] = df["AttendeeRoster"].fillna("").astype(str).replace({"nan": "", "None": "", "NaN": "", "0.0": "", "0": ""})
         if "SchoolFunding" not in df.columns:
             df["SchoolFunding"] = 0.0
         else:
@@ -2105,43 +2257,49 @@ def add_trip(name: str, destination: str, start_date: str, end_date: str, nights
 
 
 def delete_trip(trip_id: str, is_officer: bool = False) -> bool:
-    """Delete a trip from the database by its TripID, and clean up signups and member history."""
+    """Delete a trip from the database by its TripID or Name, and clean up signups, ledger, and member history."""
     try:
+        if not trip_id:
+            return False
         df = load_trips(season=None, is_officer=is_officer)
-        match_idx = df[df["TripID"] == trip_id].index
+        match_idx = df[(df["TripID"].astype(str).str.strip() == str(trip_id).strip()) |
+                       (df["Name"].astype(str).str.lower().str.strip() == str(trip_id).lower().strip())].index
         if len(match_idx) > 0:
             trip_row = df.loc[match_idx[0]]
             trip_name = str(trip_row.get("Name", "")).strip()
+            actual_trip_id = str(trip_row.get("TripID", "")).strip()
             trip_season = str(trip_row.get("Season", "")).strip()
-            attendee_roster_str = str(trip_row.get("AttendeeRoster", "")).strip()
 
-            # 1. Clean up all signups for this trip and remove trip from attendees' records
+            # 1. Clean up all signups for this trip and ledger payments
             all_signups = load_trip_signups(season=None, is_officer=is_officer)
-            trip_signups = all_signups[all_signups["TripID"] == trip_id]
-            if not trip_signups.empty:
-                signup_ids = trip_signups["SignupID"].tolist()
-                delete_multiple_trip_attendees(signup_ids, is_officer=is_officer)
+            if not all_signups.empty:
+                s_mask = (all_signups["TripID"].astype(str).str.strip() == actual_trip_id) | \
+                         (all_signups["TripName"].astype(str).str.lower().str.strip() == trip_name.lower())
+                trip_signups = all_signups[s_mask]
+                if not trip_signups.empty:
+                    for _, s_row in trip_signups.iterrows():
+                        s_name = str(s_row.get("Name", "")).strip()
+                        s_paid = _is_truthy(s_row.get("PaymentReceived", False))
+                        s_season = str(s_row.get("Season", trip_season)).strip()
+                        if s_paid and s_name:
+                            remove_trip_payment_from_ledger(s_name, trip_name, s_season, is_officer=is_officer)
+                    remaining_signups = all_signups[~s_mask].copy().reset_index(drop=True)
+                    save_trip_signups(remaining_signups, is_officer=is_officer)
 
             # 2. Delete trip from trips file
             df = df.drop(match_idx).reset_index(drop=True)
             save_trips(df, is_officer=is_officer)
 
-            # 3. Remove trip from member history for anyone in AttendeeRoster
-            roster_names = [m.strip() for m in attendee_roster_str.split(",") if m.strip() and m.strip().lower() not in ["nan", "none"]] if attendee_roster_str else []
-            for m_name in roster_names:
-                remove_trip_from_member_history(m_name, trip_name, trip_season, is_officer=is_officer)
-
-            # 4. Extra safety pass across members file for this season to remove deleted trip
+            # 3. Remove deleted trip from members file across all members
             members_df = load_members(season=None, is_officer=is_officer)
-            if "TripsAttended" in members_df.columns:
+            if not members_df.empty and "TripsAttended" in members_df.columns:
                 m_changed = False
                 for m_idx, m_row in members_df.iterrows():
                     m_trips = str(m_row.get("TripsAttended", "")).strip()
-                    m_s = str(m_row.get("Season", "")).strip()
-                    if m_s == trip_season or not trip_season or trip_season == "All Seasons":
-                        t_list = [t.strip() for t in m_trips.split(",") if t.strip() and t.strip().lower() not in ["nan", "none"]]
-                        if any(t.lower() == trip_name.lower() for t in t_list):
-                            new_t_list = [t for t in t_list if t.lower() != trip_name.lower()]
+                    if m_trips and m_trips.lower() not in ["nan", "none", "0.0", "0"]:
+                        t_list = [t.strip() for t in m_trips.split(",") if t.strip() and t.strip().lower() not in ["nan", "none", "0.0", "0"]]
+                        new_t_list = [t for t in t_list if t.lower() != trip_name.lower()]
+                        if len(new_t_list) != len(t_list):
                             members_df.at[m_idx, "TripsAttended"] = ", ".join(new_t_list)
                             m_changed = True
                 if m_changed:
@@ -2740,59 +2898,120 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
         return False
 
 
-def delete_multiple_trip_attendees(signup_ids: list[str], is_officer: bool = False) -> int:
+def delete_multiple_trip_attendees(signup_ids: list, trip_id: str = None, trip_name: str = None,
+                                   season: str = None, is_officer: bool = False) -> int:
     """
-    Remove multiple attendees from trip sign-up rosters,
+    Remove multiple attendees from trip sign-up rosters and AttendeeRoster,
     automatically remove the trip from each athlete's TripsAttended history in members file,
-    remove attendee names from trips file AttendeeRoster,
     and remove any recorded trip payment from the ledger.
+    Accepts SignupIDs, athlete names, or attendee dicts.
     Returns the count of removed attendees.
     """
     try:
         if not signup_ids:
             return 0
-        all_signups = load_trip_signups(season=None, is_officer=is_officer)
-        match_rows = all_signups[all_signups["SignupID"].isin(signup_ids)]
-        if match_rows.empty:
-            return 0
 
-        # 1. Remove matching rows from trip_signups file FIRST
-        remaining_signups = all_signups[~all_signups["SignupID"].isin(signup_ids)].copy().reset_index(drop=True)
-        save_trip_signups(remaining_signups, is_officer=is_officer)
+        target_signup_ids = set()
+        target_names = set()
+        for item in signup_ids:
+            if isinstance(item, dict):
+                if item.get("signup_id"):
+                    target_signup_ids.add(str(item["signup_id"]).strip())
+                if item.get("name"):
+                    target_names.add(str(item["name"]).strip().lower())
+            elif isinstance(item, str):
+                s = item.strip()
+                if s.startswith("SIGNUP-"):
+                    target_signup_ids.add(s)
+                else:
+                    target_names.add(s.lower())
+
+        all_signups = load_trip_signups(season=None, is_officer=is_officer)
+        matched_signups_mask = pd.Series(False, index=all_signups.index) if not all_signups.empty else pd.Series(dtype=bool)
+        affected_trips = set()
+        removed_records = []
+
+        if not all_signups.empty:
+            if target_signup_ids:
+                matched_signups_mask = matched_signups_mask | all_signups["SignupID"].isin(target_signup_ids)
+            if target_names:
+                name_match = all_signups["Name"].astype(str).str.lower().str.strip().isin(target_names)
+                if trip_id or trip_name:
+                    t_filter = pd.Series(False, index=all_signups.index)
+                    if trip_id:
+                        t_filter = t_filter | (all_signups["TripID"].astype(str).str.strip() == str(trip_id).strip())
+                    if trip_name:
+                        t_filter = t_filter | (all_signups["TripName"].astype(str).str.lower().str.strip() == str(trip_name).lower().strip())
+                    name_match = name_match & t_filter
+                matched_signups_mask = matched_signups_mask | name_match
+
+            match_rows = all_signups[matched_signups_mask]
+            for _, row in match_rows.iterrows():
+                r_name = str(row.get("Name", "")).strip()
+                r_trip = str(row.get("TripName", "")).strip()
+                r_season = str(row.get("Season", "")).strip()
+                r_paid = _is_truthy(row.get("PaymentReceived", False))
+                if r_name:
+                    target_names.add(r_name.lower())
+                if r_trip:
+                    affected_trips.add(r_trip.lower())
+                removed_records.append((r_name, r_trip, r_season, r_paid))
+
+            # 1. Remove matching rows from trip_signups file
+            if matched_signups_mask.any():
+                remaining_signups = all_signups[~matched_signups_mask].copy().reset_index(drop=True)
+                save_trip_signups(remaining_signups, is_officer=is_officer)
+
+        if trip_name:
+            affected_trips.add(str(trip_name).strip().lower())
 
         # 2. Update trips file AttendeeRoster and adjust Attendees count
         trips_df = load_trips(season=None, is_officer=is_officer)
         if not trips_df.empty and "AttendeeRoster" in trips_df.columns:
             trips_changed = False
-            for _, row in match_rows.iterrows():
-                name = str(row.get("Name", "")).strip()
-                t_id = str(row.get("TripID", "")).strip()
-                t_name = str(row.get("TripName", "")).strip()
-                t_match = trips_df[(trips_df["TripID"] == t_id) | (trips_df["Name"].str.lower() == t_name.lower())].index
-                if len(t_match) > 0:
-                    for t_idx in t_match:
-                        curr_roster = str(trips_df.loc[t_idx, "AttendeeRoster"]).strip()
-                        if curr_roster and curr_roster.lower() not in ["nan", "none"]:
-                            r_names = [n.strip() for n in curr_roster.split(",") if n.strip()]
-                            new_r = [n for n in r_names if n.lower() != name.lower()]
-                            if len(new_r) != len(r_names):
-                                trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(new_r)
-                                trips_changed = True
+            for t_idx, t_row in trips_df.iterrows():
+                curr_t_id = str(t_row.get("TripID", "")).strip()
+                curr_t_name = str(t_row.get("Name", "")).strip().lower()
+                is_affected = (curr_t_name in affected_trips) or (trip_id and curr_t_id == str(trip_id).strip())
+                if is_affected:
+                    curr_roster = str(t_row.get("AttendeeRoster", "")).strip()
+                    if curr_roster and curr_roster.lower() not in ["nan", "none", "0.0", "0"]:
+                        r_names = [n.strip() for n in curr_roster.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]]
+                        new_r = [n for n in r_names if n.lower() not in target_names]
+                        if len(new_r) != len(r_names):
+                            trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(new_r)
+                            if "Attendees" in trips_df.columns:
+                                try:
+                                    trips_df.at[t_idx, "Attendees"] = max(0, len(new_r))
+                                except Exception:
+                                    pass
+                            trips_changed = True
             if trips_changed:
                 save_trips(trips_df, is_officer=is_officer)
 
-        # 3. Remove trip from each member's history in members file and clean up ledger payments if paid
-        for _, row in match_rows.iterrows():
-            name = str(row.get("Name", "")).strip()
-            trip_name = str(row.get("TripName", "")).strip()
-            season = str(row.get("Season", "")).strip()
-            was_paid = bool(row.get("PaymentReceived", False))
-            if name and trip_name:
-                remove_trip_from_member_history(name, trip_name, season, is_officer=is_officer)
-                if was_paid:
-                    remove_trip_payment_from_ledger(name, trip_name, season, is_officer=is_officer)
+        # 3. Clean up ledger payments
+        for r_name, r_trip, r_season, r_paid in removed_records:
+            if r_paid and r_name and r_trip:
+                remove_trip_payment_from_ledger(r_name, r_trip, r_season, is_officer=is_officer)
 
-        return len(match_rows)
+        # 4. Remove trip(s) from each member's TripsAttended in members.csv
+        members_df = load_members(season=None, is_officer=is_officer)
+        if not members_df.empty and "TripsAttended" in members_df.columns:
+            m_changed = False
+            for m_idx, m_row in members_df.iterrows():
+                m_name = str(m_row.get("Name", "")).strip().lower()
+                if m_name in target_names:
+                    curr_trips = str(m_row.get("TripsAttended", "")).strip()
+                    if curr_trips and curr_trips.lower() not in ["nan", "none", "0.0", "0"]:
+                        t_list = [t.strip() for t in curr_trips.split(",") if t.strip() and t.strip().lower() not in ["nan", "none", "0.0", "0"]]
+                        new_t_list = [t for t in t_list if t.lower() not in affected_trips]
+                        if len(new_t_list) != len(t_list):
+                            members_df.at[m_idx, "TripsAttended"] = ", ".join(new_t_list)
+                            m_changed = True
+            if m_changed:
+                save_members(members_df, is_officer=is_officer)
+
+        return max(len(target_names), len(removed_records))
     except Exception as e:
         print(f"Error deleting multiple trip attendees: {e}")
         return 0
