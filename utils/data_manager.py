@@ -124,6 +124,55 @@ def purge_demo_members_from_df(df: pd.DataFrame) -> pd.DataFrame:
     return clean[mask].copy().reset_index(drop=True)
 
 
+def format_phone_number(phone_str: str) -> str:
+    """
+    Standardize a phone number string to XXX-XXX-XXXX format.
+    Handles raw 10-digit strings, strings with dashes/dots/spaces/parentheses,
+    and 11-digit numbers with leading US country code '1'.
+    Returns the original string cleaned if it cannot be parsed to 10 digits.
+    """
+    if phone_str is None or pd.isna(phone_str):
+        return ""
+    raw = str(phone_str).strip()
+    if not raw or raw.lower() in ["nan", "none", "null"]:
+        return ""
+    
+    # Remove all non-digits
+    digits = re.sub(r"\D", "", raw)
+    # If 11 digits and starts with 1, drop leading US country code
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    
+    if len(digits) == 10:
+        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    
+    return raw
+
+
+def generate_next_member_id(all_df: pd.DataFrame, season: str = CURRENT_SEASON) -> str:
+    """
+    Generate the next sequential MemberID for a given season.
+    For season 2026-2027, generates MBR-26-001, MBR-26-002, etc.
+    Finds the maximum sequence number present for the season's prefix and increments by 1.
+    """
+    season_short = season.replace("20", "")[:2] if season else "26"
+    prefix = f"MBR-{season_short}-"
+    if all_df is None or all_df.empty or "MemberID" not in all_df.columns:
+        return f"{prefix}001"
+    
+    existing_ids = all_df["MemberID"].dropna().astype(str).tolist()
+    nums = []
+    for mid in existing_ids:
+        mid_s = mid.strip()
+        if mid_s.startswith(prefix):
+            suffix = mid_s[len(prefix):]
+            if suffix.isdigit():
+                nums.append(int(suffix))
+    
+    next_num = max(nums) + 1 if nums else 1
+    return f"{prefix}{next_num:03d}"
+
+
 # --- GOOGLE SHEETS CLOUD CONNECTION (OPTION 1A) ---
 
 def get_gsheets_connection():
@@ -1542,6 +1591,8 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
 
         for col in ["Name", "Email", "Phone", "Year", "SkiBoard", "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"]:
             if col in df_to_merge.columns:
+                if col == "Phone":
+                    df_to_merge["Phone"] = df_to_merge["Phone"].apply(format_phone_number)
                 full_df.update(df_to_merge[[col]])
 
         full_df.reset_index(inplace=True)
@@ -1558,20 +1609,14 @@ def add_member(name: str, email: str, phone: str, dues_paid: bool, tshirt_size: 
     """Add a new member to the roster for the given season."""
     try:
         all_df = load_members(season=None, is_officer=is_officer)
-        existing_ids = set(all_df["MemberID"].dropna().astype(str).tolist())
-        season_short = season.replace("20", "")[:2] if season else "26"
-        count_in_season = len(all_df[all_df["Season"] == season]) + 1
-        new_id = f"MBR-{season_short}-{count_in_season:03d}"
-        while new_id in existing_ids:
-            count_in_season += 1
-            new_id = f"MBR-{season_short}-{count_in_season:03d}"
+        new_id = generate_next_member_id(all_df, season=season)
 
         new_member = pd.DataFrame([{
             "MemberID": new_id,
             "Season": season,
             "Name": name.strip(),
             "Email": email.strip(),
-            "Phone": phone.strip(),
+            "Phone": format_phone_number(phone),
             "Year": str(year).strip(),
             "SkiBoard": str(ski_board).strip(),
             "DuesPaid": bool(dues_paid),
@@ -1921,8 +1966,6 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
 
         added_count = 0
         updated_count = 0
-        season_short = target_season.replace("20", "")[:2] if target_season else "26"
-        existing_ids = set(all_members["MemberID"].dropna().astype(str).tolist())
 
         for _, row in df_form.iterrows():
             name_val = str(row.get(col_map.get("name", ""), "")).strip()
@@ -1983,7 +2026,7 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                 if clean_notes:
                     all_members.loc[idx, "Notes"] = clean_notes
                 if phone_val and phone_val.lower() != "nan":
-                    all_members.loc[idx, "Phone"] = phone_val
+                    all_members.loc[idx, "Phone"] = format_phone_number(phone_val)
                 if dues_paid:
                     all_members.loc[idx, "DuesPaid"] = True
                     record_dues_payment_in_ledger(name_val.title(), season=target_season, is_officer=is_officer)
@@ -1993,19 +2036,14 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
             else:
                 # Add new member
                 added_count += 1
-                count_in_season = len(all_members[all_members["Season"] == target_season]) + 1
-                m_id = f"MBR-{season_short}-{count_in_season:03d}"
-                while m_id in existing_ids:
-                    count_in_season += 1
-                    m_id = f"MBR-{season_short}-{count_in_season:03d}"
-                existing_ids.add(m_id)
+                m_id = generate_next_member_id(all_members, season=target_season)
 
                 new_row = pd.DataFrame([{
                     "MemberID": m_id,
                     "Season": target_season,
                     "Name": name_val.title(),
                     "Email": email_val if email_val != "nan" else f"{name_val.lower().replace(' ', '')[:8]}@ucsb.edu",
-                    "Phone": phone_val if phone_val != "nan" else "",
+                    "Phone": format_phone_number(phone_val) if phone_val != "nan" else "",
                     "Year": clean_year,
                     "SkiBoard": clean_skiboard,
                     "DuesPaid": dues_paid,
@@ -2743,7 +2781,7 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
             if not name_val or name_val.lower() == "nan":
                 continue
 
-            clean_phone = "" if phone_val.lower() == "nan" else phone_val
+            clean_phone = format_phone_number(phone_val) if phone_val.lower() != "nan" else ""
             clean_driving = "Cannot drive" if driving_val.lower() in ["nan", "", "no"] else driving_val
             clean_questions = "" if questions_val.lower() in ["nan", "none", "n/a", "no"] else questions_val
 
@@ -2849,7 +2887,7 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
             "TripName": trip_name.strip(),
             "Season": season,
             "Name": clean_name,
-            "Phone": phone.strip(),
+            "Phone": format_phone_number(phone),
             "DrivingCapacity": driving_capacity.strip(),
             "Questions": questions.strip(),
             "PaymentReceived": bool(payment_received),
