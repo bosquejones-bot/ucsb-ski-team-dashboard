@@ -6,7 +6,7 @@ and maintaining a permanent archive of completed tasks.
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from utils.data_manager import (
     load_todos, add_todo, set_todo_status, delete_todo,
     load_officers, add_officer, delete_officer

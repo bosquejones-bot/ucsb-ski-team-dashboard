@@ -58,6 +58,14 @@ TRIPS_EVENTS_SHEET_URL = _get_secret("TRIPS_EVENTS_SHEET_URL", "")
 MEMBERS_SHEET_URL = _get_secret("MEMBERS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL or DEFAULT_MEMBERSHIP_FORM_SHEET_URL
 LEDGER_SHEET_URL = _get_secret("LEDGER_SHEET_URL", "") or DEFAULT_LEDGER_SHEET_URL
 
+# Official Google Calendar Integration
+DEFAULT_GOOGLE_CALENDAR_ID = "79abd04a03a59b0c00b23d1d5920cfdc0844d534798af00489c0215d147ea7e1@group.calendar.google.com"
+GOOGLE_CALENDAR_ID = _get_secret("GOOGLE_CALENDAR_ID", DEFAULT_GOOGLE_CALENDAR_ID)
+
+# Demo Mode Placeholder Google Calendar (Public US Holidays / Sample Calendar)
+DEFAULT_DEMO_GOOGLE_CALENDAR_ID = "en.usa#holiday@group.v.calendar.google.com"
+DEMO_GOOGLE_CALENDAR_ID = _get_secret("DEMO_GOOGLE_CALENDAR_ID", DEFAULT_DEMO_GOOGLE_CALENDAR_ID)
+
 # Default Trip Sign-Up Driver Options
 DEFAULT_TRIP_DRIVER_OPTIONS = [
     "Cannot drive",
