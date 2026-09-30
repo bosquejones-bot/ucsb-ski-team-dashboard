@@ -10,7 +10,8 @@ from datetime import date
 from utils.data_manager import (
     load_members, save_members, add_member, delete_member, delete_multiple_members,
     save_edited_members, fetch_and_sync_google_sheet, parse_and_sync_google_form_df,
-    reset_active_season_roster, get_merch_inventory_summary
+    reset_active_season_roster, get_merch_inventory_summary,
+    load_ledger, reconcile_membership_dues_with_ledger
 )
 from config import (
     ANNUAL_DUES_AMOUNT, CURRENT_SEASON, SHIRT_SIZES,
@@ -167,6 +168,39 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
     )
 
     st.divider()
+
+    # --- DUES SYNCHRONIZATION WITH FINANCIAL LEDGER ---
+    df_ledger_check = load_ledger(season=selected_season if selected_season != "All Seasons" else None, is_officer=is_officer)
+    dues_entities = set(
+        df_ledger_check[
+            df_ledger_check["Category"].isin(["Membership", "Membership Dues"]) &
+            (df_ledger_check["Type"] == "Income")
+        ]["Entity"].astype(str).str.lower().str.strip()
+    )
+    paid_names = [
+        str(n).strip() for n in members_df[members_df["DuesPaid"] == True]["Name"].dropna()
+        if str(n).strip().lower() not in ["", "nan", "none"]
+    ]
+    missing_ledger_dues = [n for n in paid_names if n.lower() not in dues_entities]
+
+    if missing_ledger_dues:
+        c_sync_msg, c_sync_btn = st.columns([3, 1])
+        with c_sync_msg:
+            st.warning(
+                f"Dues Sync Alert: {len(missing_ledger_dues)} member(s) marked as paid have no corresponding entry in the financial ledger."
+            )
+        with c_sync_btn:
+            if is_officer and can_edit:
+                if st.button("Reconcile Dues to Ledger", type="primary", key=f"reconcile_dues_btn_{selected_season}", width="stretch"):
+                    with st.spinner("Reconciling dues with ledger..."):
+                        added, _ = reconcile_membership_dues_with_ledger(
+                            season=selected_season if selected_season != "All Seasons" else None,
+                            is_officer=is_officer
+                        )
+                        st.success(f"Reconciled {added} dues payment(s) to ledger.")
+                        st.rerun()
+            else:
+                st.caption("Officer editing required to reconcile.")
 
     # --- MANUAL MEMBER ENTRY FORM ---
     with st.expander("Register Member Manually", expanded=False):

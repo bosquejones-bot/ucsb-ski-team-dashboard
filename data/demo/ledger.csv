@@ -1,4 +1,5 @@
 Date,Entity,Amount,Category,Notes,Type,Season,LoggedBy
+09-30-2026,Jordan Taylor,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,
 05-20-2027,Isla Vista Mini Storage,480.0,Other,"Annual locker rental for slalom gates, wax benches & drills",Expense,2026-2027,Gear Manager
 05-12-2027,Campus Catering,920.0,Socials,Banquet dinner buffet & dessert,Expense,2026-2027,Social Chair
 05-10-2027,The Club & Guest House UCSB,850.0,Socials,Annual End-of-Season Awards Banquet venue rental,Expense,2026-2027,Social Chair
@@ -47,6 +48,36 @@ Date,Entity,Amount,Category,Notes,Type,Season,LoggedBy
 10-14-2026,IV Theater Rental,350.0,Socials,TGR ski film premiere screening hall rental,Expense,2026-2027,Social Chair
 10-10-2026,Alterra Mountain Co,1200.0,Ikon,Ikon Pass club group discount commission rebate,Income,2026-2027,Treasurer
 10-04-2026,Fall 2026 Dues Wave 2,1500.0,Membership Dues,25 additional member sign-ups,Income,2026-2027,Treasurer
+09-30-2026,Morgan Reed,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Alex Morgan,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Sam Patel,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Rowan Robinson,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Taylor Brooks,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Chris Martinez,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Cameron Lee,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Dakota Johnson,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Skyler White,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Peyton Clark,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Quinn Anderson,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Finley Thomas,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Taylor Brooks,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Logan Harris,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Kendall Martin,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Jesse Garcia,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Hayden Jackson,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Spencer Lewis,60.0,Membership,Membership dues payment - 2026-2027,Income,2026-2027,Dues Reconciliation
+09-30-2026,Dakota Johnson,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Logan Harris,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Jordan Taylor,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Kendall Martin,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Jesse Garcia,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Quinn Anderson,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Finley Thomas,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Rowan Robinson,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Hayden Jackson,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Skyler White,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Chris Martinez,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
+09-30-2026,Alex Morgan,60.0,Membership,Membership dues payment - 2025-2026,Income,2025-2026,Dues Reconciliation
 09-22-2026,Surf & Mountain Supply,1000.0,Sponsorship,Annual gold-tier club sponsor contribution,Income,2026-2027,President
 09-18-2026,Campus Merch Pop-Up,520.0,Merch,Club fair t-shirt & sticker sales,Income,2026-2027,Gear Manager
 09-12-2026,Alpine Screenprinting,1450.0,Merch,Season 26-27 team t-shirts restock order (180 units),Expense,2026-2027,Gear Manager
@@ -76,8 +107,8 @@ Date,Entity,Amount,Category,Notes,Type,Season,LoggedBy
 01-24-2026,Big Bear Mountain Tickets,120.0,Lift Tickets,Beginner day passes,Expense,2025-2026,Trip Director
 01-23-2026,Stater Bros,260.0,Food/Drink (Trip),Big Bear food & drinks,Expense,2025-2026,Trip Director
 01-22-2026,Big Bear Vacation Rentals,1800.0,Housing/Rental,2 nights cabin,Expense,2025-2026,Trip Director
-01-20-2026,Big Bear Weekend Signups,2520.0,Trip Payment,18 attendees at $140,Income,2025-2026,Trip Director
 01-20-2026,Member Gas Reimbursement,1400.0,Transportation/Gas,8 driver vehicles (880 miles),Expense,2025-2026,Trip Director
+01-20-2026,Big Bear Weekend Signups,2520.0,Trip Payment,18 attendees at $140,Income,2025-2026,Trip Director
 01-15-2026,Palisades Group Lift Tickets,350.0,Lift Tickets,Non-Ikon athlete day passes,Expense,2025-2026,Trip Director
 01-14-2026,Raley's Supermarket,500.0,Food/Drink (Trip),Tahoe weekend group provisions,Expense,2025-2026,Trip Director
 01-10-2026,Lake Tahoe MLK Signups,6720.0,Trip Payment,32 attendees at $210,Income,2025-2026,Trip Director

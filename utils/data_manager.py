@@ -1520,12 +1520,85 @@ def remove_dues_payment_from_ledger(member_name: str, season: str = CURRENT_SEAS
         return False
 
 
+def reconcile_membership_dues_with_ledger(season: str = None, is_officer: bool = False) -> tuple[int, int]:
+    """
+    Audit and reconcile membership dues with ledger entries.
+    For each member marked DuesPaid == True in the specified season (or all seasons if None/'All Seasons'),
+    checks if a corresponding Income entry exists in the ledger under Category 'Membership' or 'Membership Dues'.
+    If missing, automatically creates the $60.00 dues entry.
+    Returns (added_count, total_checked).
+    """
+    try:
+        members_df = load_members(season=season if (season and season != "All Seasons") else None, is_officer=is_officer)
+        if members_df.empty:
+            return 0, 0
+
+        df_ledger = load_ledger(season=None, is_officer=is_officer).copy()
+        dues_ledger = df_ledger[
+            df_ledger["Category"].isin(["Membership", "Membership Dues"]) &
+            (df_ledger["Type"] == "Income")
+        ]
+
+        added_transactions = []
+        total_checked = 0
+
+        for _, m_row in members_df.iterrows():
+            name = str(m_row.get("Name", "")).strip()
+            if not name or name.lower() in ["nan", "none"]:
+                continue
+
+            m_season = str(m_row.get("Season", CURRENT_SEASON)).strip()
+            is_paid = _is_truthy(m_row.get("DuesPaid", False))
+            if not is_paid:
+                continue
+
+            total_checked += 1
+            clean_name = name.title()
+
+            matches = dues_ledger[
+                (dues_ledger["Entity"].astype(str).str.lower().str.strip() == clean_name.lower()) &
+                (dues_ledger["Season"] == m_season)
+            ]
+
+            already_queued = any(
+                t["Entity"].lower() == clean_name.lower() and t["Season"] == m_season
+                for t in added_transactions
+            )
+
+            if matches.empty and not already_queued:
+                added_transactions.append({
+                    "Date": date.today().strftime("%m-%d-%Y"),
+                    "Entity": clean_name,
+                    "Amount": 60.00,
+                    "Category": "Membership",
+                    "Notes": f"Membership dues payment - {m_season}",
+                    "Type": "Income",
+                    "Season": m_season,
+                    "LoggedBy": "Dues Reconciliation"
+                })
+
+        if added_transactions:
+            df_ledger = pd.concat([pd.DataFrame(added_transactions), df_ledger], ignore_index=True)
+            save_ledger(df_ledger, is_officer=is_officer)
+            try:
+                import streamlit as st
+                st.cache_data.clear()
+            except Exception:
+                pass
+
+        return len(added_transactions), total_checked
+    except Exception as e:
+        print(f"Error reconciling membership dues: {e}")
+        return 0, 0
+
+
 def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None, is_officer: bool = False) -> bool:
     """
     Update members from in-table st.data_editor edits.
     Merges updated rows back into the main members dataset by MemberID.
     Automatically logs a $60 Membership Income entry in the ledger when DuesPaid is checked,
     and removes the corresponding ledger entry when DuesPaid is unchecked (revoked).
+    Batches ledger updates to prevent race conditions and Google Sheets rate limits.
     """
     try:
         full_df = load_members(season=None, is_officer=is_officer)
@@ -1552,29 +1625,70 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
         full_df.set_index("MemberID", inplace=True)
         df_to_merge.set_index("MemberID", inplace=True)
 
-        def _to_bool(val) -> bool:
-            if isinstance(val, (bool, np.bool_)):
-                return bool(val)
-            if isinstance(val, (int, np.integer, float, np.floating)):
-                return val != 0 and not np.isnan(val)
-            s = str(val).strip().lower()
-            return s in ["true", "1", "yes", "y", "t"]
+        # Load ledger ONCE for batched atomic updates
+        df_ledger = load_ledger(season=None, is_officer=is_officer).copy()
+        ledger_changed = False
+        new_transactions = []
+        indices_to_drop = []
 
         # Detect newly checked or unchecked Dues Paid boxes, and trip roster updates
         for mid, row in df_to_merge.iterrows():
             if mid in full_df.index:
-                was_paid = _is_truthy(full_df.loc[mid, "DuesPaid"]) if "DuesPaid" in full_df.columns else False
+                row_full = full_df.loc[mid]
+                if isinstance(row_full, pd.DataFrame):
+                    row_full = row_full.iloc[0]
+
                 now_paid = _is_truthy(row.get("DuesPaid", False))
-                athlete_name = str(row.get("Name", full_df.loc[mid, "Name"])).strip().title()
-                athlete_season = str(row.get("Season", full_df.loc[mid, "Season"])).strip()
-                if not was_paid and now_paid:
-                    record_dues_payment_in_ledger(athlete_name, season=athlete_season, is_officer=is_officer)
-                elif was_paid and not now_paid:
-                    remove_dues_payment_from_ledger(athlete_name, season=athlete_season, is_officer=is_officer)
+                athlete_name = str(row.get("Name", row_full["Name"])).strip().title()
+                athlete_season = str(row.get("Season", row_full["Season"])).strip()
+
+                if now_paid:
+                    # Ensure dues transaction exists in ledger
+                    clean_name = athlete_name.strip()
+                    existing_mask = (
+                        (df_ledger["Entity"].astype(str).str.lower().str.strip() == clean_name.lower()) &
+                        (df_ledger["Category"].isin(["Membership", "Membership Dues"])) &
+                        (df_ledger["Type"] == "Income") &
+                        (df_ledger["Season"] == athlete_season)
+                    )
+                    already_queued = any(
+                        t["Entity"].lower() == clean_name.lower() and t["Season"] == athlete_season
+                        for t in new_transactions
+                    )
+                    if not existing_mask.any() and not already_queued:
+                        new_transactions.append({
+                            "Date": date.today().strftime("%m-%d-%Y"),
+                            "Entity": clean_name,
+                            "Amount": 60.00,
+                            "Category": "Membership",
+                            "Notes": f"Membership dues payment - {athlete_season}",
+                            "Type": "Income",
+                            "Season": athlete_season,
+                            "LoggedBy": "Officer Table Edit" if is_officer else ""
+                        })
+                        ledger_changed = True
+                else:
+                    # DuesPaid is False: remove corresponding ledger entries if present
+                    clean_name = athlete_name.strip().lower()
+                    existing_mask = (
+                        (df_ledger["Entity"].astype(str).str.lower().str.strip() == clean_name) &
+                        (df_ledger["Category"].isin(["Membership", "Membership Dues"])) &
+                        (df_ledger["Type"] == "Income") &
+                        (df_ledger["Season"] == athlete_season)
+                    )
+                    matching_indices = df_ledger[existing_mask].index.tolist()
+                    if matching_indices:
+                        indices_to_drop.extend(matching_indices)
+                        ledger_changed = True
+                    # Also purge from any transactions queued in this batch
+                    new_transactions = [
+                        t for t in new_transactions
+                        if not (t["Entity"].lower() == clean_name and t["Season"] == athlete_season)
+                    ]
 
                 # Detect changes in Trips Attended
                 if "TripsAttended" in row:
-                    old_raw = str(full_df.loc[mid, "TripsAttended"]) if "TripsAttended" in full_df.columns and pd.notnull(full_df.loc[mid, "TripsAttended"]) else ""
+                    old_raw = str(row_full["TripsAttended"]) if "TripsAttended" in full_df.columns and pd.notnull(row_full["TripsAttended"]) else ""
                     new_raw = str(row["TripsAttended"]) if pd.notnull(row["TripsAttended"]) else ""
                     if old_raw.lower() in ["nan", "none", "0.0", "0"]:
                         old_raw = ""
@@ -1589,6 +1703,14 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
                     for add_t in added_trips:
                         add_trip_to_member_roster(athlete_name, add_t, season=athlete_season, is_officer=is_officer)
 
+        # Apply batched ledger updates
+        if indices_to_drop:
+            df_ledger = df_ledger.drop(index=list(set(indices_to_drop))).reset_index(drop=True)
+        if new_transactions:
+            df_ledger = pd.concat([pd.DataFrame(new_transactions), df_ledger], ignore_index=True)
+        if ledger_changed:
+            save_ledger(df_ledger, is_officer=is_officer)
+
         for col in ["Name", "Email", "Phone", "Year", "SkiBoard", "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"]:
             if col in df_to_merge.columns:
                 if col == "Phone":
@@ -1597,6 +1719,11 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
 
         full_df.reset_index(inplace=True)
         save_members(full_df, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"Error saving edited members: {e}")
@@ -1670,15 +1797,29 @@ def delete_multiple_members(member_ids: list[str], is_officer: bool = False) -> 
 
         all_signups = load_trip_signups(season=None, is_officer=is_officer)
 
+        df_ledger = load_ledger(season=None, is_officer=is_officer).copy()
+        ledger_changed = False
+        indices_to_drop = []
+
         # For each deleted member:
         for _, m_row in match_rows.iterrows():
             name = str(m_row.get("Name", "")).strip()
             season = str(m_row.get("Season", "")).strip()
-            was_paid = bool(m_row.get("DuesPaid", False))
+            was_paid = _is_truthy(m_row.get("DuesPaid", False))
             if name:
                 # Remove dues payment from ledger if dues were marked paid
                 if was_paid:
-                    remove_dues_payment_from_ledger(name, season=season, is_officer=is_officer)
+                    clean_name = name.strip().lower()
+                    existing_mask = (
+                        (df_ledger["Entity"].astype(str).str.lower().str.strip() == clean_name) &
+                        (df_ledger["Category"].isin(["Membership", "Membership Dues"])) &
+                        (df_ledger["Type"] == "Income") &
+                        (df_ledger["Season"] == season)
+                    )
+                    matching_indices = df_ledger[existing_mask].index.tolist()
+                    if matching_indices:
+                        indices_to_drop.extend(matching_indices)
+                        ledger_changed = True
 
                 # Clean up any trip signups for this member in that season
                 if not all_signups.empty:
@@ -1689,9 +1830,19 @@ def delete_multiple_members(member_ids: list[str], is_officer: bool = False) -> 
                     if not m_signups.empty:
                         delete_multiple_trip_attendees(m_signups["SignupID"].tolist(), is_officer=is_officer)
 
+        if indices_to_drop:
+            df_ledger = df_ledger.drop(index=list(set(indices_to_drop))).reset_index(drop=True)
+        if ledger_changed:
+            save_ledger(df_ledger, is_officer=is_officer)
+
         # Drop the deleted members from members.csv
         remaining_members = all_members[~all_members["MemberID"].isin(clean_ids)].copy().reset_index(drop=True)
         save_members(remaining_members, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
         return len(match_rows)
     except Exception as e:
         print(f"Error deleting members: {e}")
@@ -1966,6 +2117,9 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
 
         added_count = 0
         updated_count = 0
+        df_ledger = load_ledger(season=None, is_officer=is_officer).copy()
+        ledger_changed = False
+        new_dues_txs = []
 
         for _, row in df_form.iterrows():
             name_val = str(row.get(col_map.get("name", ""), "")).strip()
@@ -2008,6 +2162,33 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                     tshirt_size = sz
                     break
 
+            # Helper for batching dues
+            def _queue_dues_if_missing(clean_member_name: str):
+                nonlocal ledger_changed
+                clean_c = clean_member_name.strip()
+                existing_mask = (
+                    (df_ledger["Entity"].astype(str).str.lower().str.strip() == clean_c.lower()) &
+                    (df_ledger["Category"].isin(["Membership", "Membership Dues"])) &
+                    (df_ledger["Type"] == "Income") &
+                    (df_ledger["Season"] == target_season)
+                )
+                already_queued = any(
+                    t["Entity"].lower() == clean_c.lower() and t["Season"] == target_season
+                    for t in new_dues_txs
+                )
+                if not existing_mask.any() and not already_queued:
+                    new_dues_txs.append({
+                        "Date": date.today().strftime("%m-%d-%Y"),
+                        "Entity": clean_c,
+                        "Amount": 60.00,
+                        "Category": "Membership",
+                        "Notes": f"Membership dues payment - {target_season}",
+                        "Type": "Income",
+                        "Season": target_season,
+                        "LoggedBy": "Google Form Sync" if is_officer else ""
+                    })
+                    ledger_changed = True
+
             # Check if athlete already exists in this season
             email_match = pd.Series(False, index=all_members.index)
             if email_val and email_val.lower() != "nan":
@@ -2029,7 +2210,7 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                     all_members.loc[idx, "Phone"] = format_phone_number(phone_val)
                 if dues_paid:
                     all_members.loc[idx, "DuesPaid"] = True
-                    record_dues_payment_in_ledger(name_val.title(), season=target_season, is_officer=is_officer)
+                    _queue_dues_if_missing(name_val.title())
                 if tshirt_size != "None":
                     all_members.loc[idx, "TShirtSize"] = tshirt_size
                 updated_count += 1
@@ -2055,7 +2236,12 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                 }])
                 all_members = pd.concat([all_members, new_row], ignore_index=True)
                 if dues_paid:
-                    record_dues_payment_in_ledger(name_val.title(), season=target_season, is_officer=is_officer)
+                    _queue_dues_if_missing(name_val.title())
+
+        if new_dues_txs:
+            df_ledger = pd.concat([pd.DataFrame(new_dues_txs), df_ledger], ignore_index=True)
+        if ledger_changed:
+            save_ledger(df_ledger, is_officer=is_officer)
 
         save_members(all_members, is_officer=is_officer)
         msg = f"Synced with Google Form: {added_count} new athlete(s) registered, {updated_count} existing record(s) updated with form questions/notes."
