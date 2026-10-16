@@ -9,7 +9,9 @@ import pandas as pd
 import plotly.express as px
 from utils.data_manager import (
     get_merch_inventory_summary, load_merch_adjustments,
-    add_merch_adjustment, delete_merch_adjustment, load_officers
+    add_merch_adjustment, delete_merch_adjustment, load_officers,
+    sync_merch_from_google_sheet, import_merch_dataframe, get_master_merch_csv_bytes,
+    save_merch_adjustments
 )
 from config import VALID_SIZES, CURRENT_SEASON, THEME_COLORS
 
@@ -53,6 +55,66 @@ def render_merch_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = F
         )
 
     st.divider()
+
+    # --- GOOGLE SHEETS LIVE SYNC AND CSV BACKUP ---
+    with st.expander("Google Sheets Live Sync and Merch Backup", expanded=False):
+        if not is_officer:
+            st.info("Officer access required to synchronize Google Sheets or restore CSV backups. Enter the officer password in the sidebar to unlock.")
+        elif not can_edit:
+            st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to sync Google Sheets or restore CSV backups.")
+        else:
+            st.markdown(
+                "Merch adjustments are automatically synchronized with the official team Google Sheet (**UCSB Ski Team - Trips & Events**, under the **Merch** tab). "
+                "This guarantees that all gear distributions, sales, and restocks persist securely across cloud sessions alongside Trips, Events, Signups, Todos, and Members."
+            )
+            tab_sync, tab_backup = st.tabs(["Live Google Sheet Sync", "CSV Backup & Restore"])
+            with tab_sync:
+                st.caption("Synchronize with the 'Merch' worksheet in the central team Google Sheet.")
+                c_sync_btn, c_push_btn = st.columns(2)
+                with c_sync_btn:
+                    if st.button("Sync Now from Google Sheet", width="stretch", key="merch_gsheet_sync_btn"):
+                        with st.spinner("Fetching latest merch records from Google Sheet..."):
+                            success, msg, count = sync_merch_from_google_sheet(is_officer=is_officer)
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with c_push_btn:
+                    if st.button("Push Local Records to Google Sheet", width="stretch", key="merch_gsheet_push_btn"):
+                        with st.spinner("Pushing local merch adjustments to Google Sheet..."):
+                            cur_adj = load_merch_adjustments(season=None, is_officer=is_officer)
+                            save_merch_adjustments(cur_adj, is_officer=is_officer)
+                            st.success(f"Successfully pushed {len(cur_adj)} merch records to Google Sheet.")
+                            st.rerun()
+            with tab_backup:
+                st.markdown("**Download Master Merch Backup**")
+                st.caption("Export all merch records across all seasons as a clean CSV file.")
+                csv_bytes = get_master_merch_csv_bytes(is_officer=is_officer)
+                st.download_button(
+                    label="Download Merch Ledger CSV",
+                    data=csv_bytes,
+                    file_name="merch_adjustments_master.csv",
+                    mime="text/csv",
+                    width="stretch",
+                    key="merch_download_csv_btn"
+                )
+                st.divider()
+                st.markdown("**Restore / Upload Merch CSV**")
+                st.caption("Upload a CSV file containing merch adjustments to restore or append records.")
+                uploaded_merch_csv = st.file_uploader("Upload Merch CSV", type=["csv"], key="merch_csv_uploader")
+                if uploaded_merch_csv is not None:
+                    if st.button("Import and Sync Uploaded CSV", width="stretch", key="merch_import_csv_btn"):
+                        try:
+                            df_up = pd.read_csv(uploaded_merch_csv)
+                            success, msg, count = import_merch_dataframe(df_up, is_officer=is_officer)
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        except Exception as e:
+                            st.error(f"Error reading uploaded CSV: {e}")
 
     # --- INDEPENDENT MERCH LOGGER FORM ---
     with st.expander("Record Independent Sale / Gear Distribution / Restock", expanded=False):

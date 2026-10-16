@@ -58,7 +58,9 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Real-time inventory calculation: Initial Stock minus Distributed T-Shirts (from registered members) plus/minus manual adjustments.
   - Inventory breakdown cards for T-Shirts and Sweatshirts across all sizes (S, M, L, XL).
   - Adjustment logging system (Sale, Restock, Damage, Giveaway, Correction) with officer attribution.
-  - Historical adjustment audit log.
+  - Historical adjustment audit log with deletion popover.
+  - **Google Sheets Live Sync & CSV Merch Backup**: Dedicated expander enabling officers to synchronize independent merch adjustments directly with the team Google Sheet (`TRIPS_EVENTS_SHEET_URL`, under the `Merch` worksheet), download the master merch adjustments CSV, or import/restore CSV backups.
+  - **Cold-Boot Cloud Persistence**: Automatically populates local cache from the Google Sheet `Merch` worksheet on Streamlit Community Cloud container restarts, ensuring zero data loss across reboots.
 - **Trip Creator & Operations** ([[modules/trip_creator.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/trip_creator.py)]):
   - Trip creation workflow supporting Recreational and Competition trips.
   - Automated Competition Trip Roster: Creating a `Competition` trip automatically identifies all active members on the Competition Team (`CompTeam == True`), adds them to the trip's `AttendeeRoster`, registers them in `trip_signups.csv`, synchronizes their `TripsAttended` history in `members.csv` for the matching season, and automatically adjusts trip expected attendees to accommodate all competitors.

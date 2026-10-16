@@ -23,6 +23,7 @@ LEDGER_WEBHOOK_URL = getattr(config, "LEDGER_WEBHOOK_URL", "")
 TRIPS_EVENTS_SHEET_URL = getattr(config, "TRIPS_EVENTS_SHEET_URL", "")
 MEMBERS_SHEET_URL = getattr(config, "MEMBERS_SHEET_URL", "")
 LEDGER_SHEET_URL = getattr(config, "LEDGER_SHEET_URL", "") or DEFAULT_LEDGER_SHEET_URL
+MERCH_SHEET_URL = getattr(config, "MERCH_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 DEMO_DATA_DIR = os.path.join(DATA_DIR, "demo")
@@ -96,6 +97,10 @@ TODO_COLS = [
 SIGNUP_COLS = [
     "SignupID", "TripID", "TripName", "Season", "Name", "Phone",
     "DrivingCapacity", "Questions", "PaymentReceived", "SignupDate"
+]
+
+MERCH_COLS = [
+    "AdjustmentID", "Season", "Date", "ItemType", "Size", "Quantity", "Reason", "LoggedBy"
 ]
 
 DEMO_MEMBER_NAMES = {
@@ -794,10 +799,8 @@ def ensure_data_initialized():
         df_todos = pd.DataFrame(columns=TODO_COLS)
         df_todos.to_csv(TODOS_FILE, index=False)
 
-    if not os.path.exists(MERCH_FILE):
-        df_merch = pd.DataFrame(columns=[
-            "AdjustmentID", "Season", "Date", "ItemType", "Size", "Quantity", "Reason", "LoggedBy"
-        ])
+    if _file_is_empty_or_missing(MERCH_FILE):
+        df_merch = pd.DataFrame(columns=MERCH_COLS)
         df_merch.to_csv(MERCH_FILE, index=False)
 
     if _file_is_empty_or_missing(EVENTS_FILE):
@@ -3432,24 +3435,125 @@ def delete_todo(task_id: str, is_officer: bool = False) -> bool:
 # --- MERCH TRACKING OPERATIONS ---
 
 def load_merch_adjustments(season: str = None, is_officer: bool = False) -> pd.DataFrame:
-    """Load independent merch sales and adjustments."""
+    """Load independent merch sales and adjustments from CSV and Google Sheets."""
     ensure_data_initialized()
-    target_file = get_merch_file(is_officer)
+    if not is_officer:
+        if os.path.exists(DEMO_MERCH_FILE):
+            df = pd.read_csv(DEMO_MERCH_FILE)
+        else:
+            df = pd.DataFrame(columns=MERCH_COLS)
+    else:
+        sheet_url = getattr(config, "MERCH_SHEET_URL", "") or getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
+        df = None
+        if sheet_url:
+            gs_df = read_gsheet_worksheet(sheet_url, "Merch", ttl=60)
+            if gs_df is not None and not gs_df.empty and "AdjustmentID" in gs_df.columns:
+                try:
+                    gs_df.to_csv(MERCH_FILE, index=False)
+                except Exception:
+                    pass
+                df = gs_df
+
+        if df is None or df.empty:
+            if os.path.exists(MERCH_FILE):
+                df = pd.read_csv(MERCH_FILE)
+            else:
+                df = pd.DataFrame(columns=MERCH_COLS)
+
     try:
-        df = pd.read_csv(target_file)
-        if "Season" not in df.columns:
-            df["Season"] = "2026-2027"
+        for col in MERCH_COLS:
+            if col not in df.columns:
+                df[col] = ""
+            df[col] = df[col].fillna("")
+        if "Season" not in df.columns or (df["Season"] == "").all():
+            df["Season"] = CURRENT_SEASON
+        df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0).astype(int)
         if season and season != "All Seasons":
             df = df[df["Season"] == season]
         return df.copy().reset_index(drop=True)
     except Exception as e:
         print(f"Error loading merch adjustments: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=MERCH_COLS)
 
 
 def save_merch_adjustments(df: pd.DataFrame, is_officer: bool = False):
-    """Save merch adjustments to CSV."""
-    df.to_csv(get_merch_file(is_officer), index=False)
+    """Save merch adjustments to CSV and Google Sheets."""
+    save_cols = [c for c in MERCH_COLS if c in df.columns]
+    save_df = df[save_cols].copy() if save_cols else df.copy()
+    if not is_officer:
+        save_df.to_csv(DEMO_MERCH_FILE, index=False)
+        return
+
+    save_df.to_csv(MERCH_FILE, index=False)
+    sheet_url = getattr(config, "MERCH_SHEET_URL", "") or getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
+    if sheet_url:
+        write_gsheet_worksheet(sheet_url, "Merch", save_df)
+
+
+def sync_merch_from_google_sheet(is_officer: bool = False) -> tuple[bool, str, int]:
+    """Force a live sync from the Google Sheet Merch worksheet, invalidating cache."""
+    sheet_url = getattr(config, "MERCH_SHEET_URL", "") or getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
+    if not sheet_url:
+        return False, "Google Sheet URL is not configured in secrets.", 0
+    try:
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
+        gs_df = read_gsheet_worksheet(sheet_url, "Merch", ttl=0)
+        if gs_df is None:
+            return False, "Could not read 'Merch' worksheet from Google Sheet.", 0
+        if not gs_df.empty and "AdjustmentID" in gs_df.columns:
+            target_file = get_merch_file(is_officer)
+            gs_df.to_csv(target_file, index=False)
+            return True, f"Successfully synchronized {len(gs_df)} merch record(s) from Google Sheet.", len(gs_df)
+        elif gs_df.empty:
+            target_file = get_merch_file(is_officer)
+            pd.DataFrame(columns=MERCH_COLS).to_csv(target_file, index=False)
+            return True, "Google Sheet 'Merch' worksheet is currently empty (0 records).", 0
+        else:
+            return False, "Worksheet 'Merch' found but missing 'AdjustmentID' column.", 0
+    except Exception as e:
+        return False, f"Failed to sync from Google Sheet: {e}", 0
+
+
+def import_merch_dataframe(df_imported: pd.DataFrame, is_officer: bool = False) -> tuple[bool, str, int]:
+    """Import and validate an uploaded CSV DataFrame of merch adjustments and save to Google Sheet and local CSV."""
+    if df_imported is None or df_imported.empty:
+        return False, "Uploaded file is empty.", 0
+    try:
+        df = df_imported.copy()
+        for col in MERCH_COLS:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[MERCH_COLS].copy()
+        df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0).astype(int)
+
+        existing_df = load_merch_adjustments(season=None, is_officer=is_officer)
+        existing_ids = set(existing_df["AdjustmentID"].dropna().astype(str).str.strip()) if not existing_df.empty and "AdjustmentID" in existing_df.columns else set()
+
+        for i, row in df.iterrows():
+            aid = str(row["AdjustmentID"]).strip()
+            if not aid or aid in existing_ids:
+                df.at[i, "AdjustmentID"] = f"ADJ-{len(existing_ids) + i + 1:03d}"
+            if not str(row["Season"]).strip():
+                df.at[i, "Season"] = CURRENT_SEASON
+            if not str(row["Date"]).strip():
+                df.at[i, "Date"] = date.today().strftime("%Y-%m-%d")
+
+        combined = pd.concat([existing_df, df], ignore_index=True) if not existing_df.empty else df
+        save_merch_adjustments(combined, is_officer=is_officer)
+        return True, f"Successfully imported and saved {len(df)} merch record(s) to Google Sheet and local database.", len(df)
+    except Exception as e:
+        return False, f"Import failed: {e}", 0
+
+
+def get_master_merch_csv_bytes(is_officer: bool = False) -> bytes:
+    """Get raw UTF-8 CSV bytes of all merch adjustments."""
+    df = load_merch_adjustments(season=None, is_officer=is_officer)
+    export_df = df[[c for c in MERCH_COLS if c in df.columns]].copy() if not df.empty else pd.DataFrame(columns=MERCH_COLS)
+    return export_df.to_csv(index=False).encode("utf-8")
 
 
 def add_merch_adjustment(item_type: str, size: str, quantity: int, reason: str, logged_by: str,
@@ -3457,7 +3561,16 @@ def add_merch_adjustment(item_type: str, size: str, quantity: int, reason: str, 
     """Record an independent merch distribution or restock."""
     try:
         df = load_merch_adjustments(season=None, is_officer=is_officer)
-        next_id = f"ADJ-{len(df) + 1:03d}"
+        nums = []
+        if not df.empty and "AdjustmentID" in df.columns:
+            for aid in df["AdjustmentID"].dropna().astype(str):
+                aid_s = aid.strip()
+                if aid_s.startswith("ADJ-"):
+                    suffix = aid_s[4:]
+                    if suffix.isdigit():
+                        nums.append(int(suffix))
+        next_num = max(nums) + 1 if nums else len(df) + 1
+        next_id = f"ADJ-{next_num:03d}"
         new_adj = pd.DataFrame([{
             "AdjustmentID": next_id,
             "Season": season,
