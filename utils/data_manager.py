@@ -774,7 +774,7 @@ def ensure_data_initialized():
     if _file_is_empty_or_missing(MEMBERS_FILE):
         df_members = pd.DataFrame(columns=[
             "MemberID", "Season", "Name", "Email", "Phone", "Year", "SkiBoard",
-            "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"
+            "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes", "Staff", "SignupDate"
         ])
         df_members.to_csv(MEMBERS_FILE, index=False)
     else:
@@ -1349,7 +1349,7 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
         else:
             df = pd.DataFrame(columns=[
                 "MemberID", "Season", "Name", "Email", "Phone", "Year", "SkiBoard",
-                "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"
+                "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes", "Staff", "SignupDate"
             ])
     else:
         sheet_url = getattr(config, "MEMBERS_SHEET_URL", "") or DEFAULT_MEMBERSHIP_FORM_SHEET_URL
@@ -1370,7 +1370,7 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             else:
                 df = pd.DataFrame(columns=[
                     "MemberID", "Season", "Name", "Email", "Phone", "Year", "SkiBoard",
-                    "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"
+                    "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes", "Staff", "SignupDate"
                 ])
         df = purge_demo_members_from_df(df)
 
@@ -1381,6 +1381,10 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
             df["DuesPaid"] = False
         if "Slack" not in df.columns:
             df["Slack"] = False
+        if "Staff" not in df.columns:
+            df["Staff"] = False
+        if "SignupDate" not in df.columns:
+            df["SignupDate"] = ""
         if "Year" not in df.columns:
             df["Year"] = ""
         if "SkiBoard" not in df.columns:
@@ -1397,6 +1401,8 @@ def load_members(season: str = None, is_officer: bool = False) -> pd.DataFrame:
         df["DuesPaid"] = df["DuesPaid"].fillna(False).astype(bool)
         df["Slack"] = df["Slack"].fillna(False).astype(bool)
         df["CompTeam"] = df["CompTeam"].fillna(False).astype(bool)
+        df["Staff"] = df["Staff"].apply(_is_truthy)
+        df["SignupDate"] = df["SignupDate"].fillna("").astype(str).replace({"nan": "", "None": "", "NaN": ""})
         def _clean_yr(y):
             s = str(y).strip()
             if not s or s.lower() in ["nan", "none", "null"]:
@@ -1614,12 +1620,15 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
             "Year": "Year",
             "Ski/Board": "SkiBoard",
             "SkiBoard": "SkiBoard",
+            "Staff": "Staff",
             "Dues Paid": "DuesPaid",
             "Slack": "Slack",
             "T-Shirt Size": "TShirtSize",
             "Comp Team": "CompTeam",
             "Trips Attended": "TripsAttended",
-            "Notes": "Notes"
+            "Notes": "Notes",
+            "Sign-Up Date": "SignupDate",
+            "SignupDate": "SignupDate"
         }
         df_to_merge = edited_df.rename(columns=col_rename_back).copy()
         if "MemberID" in df_to_merge.columns:
@@ -1714,10 +1723,12 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
         if ledger_changed:
             save_ledger(df_ledger, is_officer=is_officer)
 
-        for col in ["Name", "Email", "Phone", "Year", "SkiBoard", "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes"]:
+        for col in ["Name", "Email", "Phone", "Year", "SkiBoard", "Staff", "DuesPaid", "Slack", "TShirtSize", "CompTeam", "TripsAttended", "Notes", "SignupDate"]:
             if col in df_to_merge.columns:
                 if col == "Phone":
                     df_to_merge["Phone"] = df_to_merge["Phone"].apply(format_phone_number)
+                elif col == "Staff":
+                    df_to_merge["Staff"] = df_to_merge["Staff"].apply(_is_truthy)
                 full_df.update(df_to_merge[[col]])
 
         full_df.reset_index(inplace=True)
@@ -1735,7 +1746,8 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
 
 def add_member(name: str, email: str, phone: str, dues_paid: bool, tshirt_size: str,
                comp_team: bool, notes: str = "", season: str = CURRENT_SEASON,
-               year: str = "", ski_board: str = "", slack: bool = False, is_officer: bool = False) -> bool:
+               year: str = "", ski_board: str = "", slack: bool = False,
+               staff: bool = False, signup_date: str = None, is_officer: bool = False) -> bool:
     """Add a new member to the roster for the given season."""
     try:
         all_df = load_members(season=None, is_officer=is_officer)
@@ -1751,16 +1763,18 @@ def add_member(name: str, email: str, phone: str, dues_paid: bool, tshirt_size: 
             "SkiBoard": str(ski_board).strip(),
             "DuesPaid": bool(dues_paid),
             "Slack": bool(slack),
+            "Staff": bool(staff),
             "TShirtSize": str(tshirt_size).strip(),
             "CompTeam": bool(comp_team),
             "TripsAttended": "",
-            "Notes": notes.strip()
+            "Notes": notes.strip(),
+            "SignupDate": str(signup_date).strip() if signup_date else date.today().strftime("%Y-%m-%d")
         }])
         all_df = pd.concat([all_df, new_member], ignore_index=True)
         save_members(all_df, is_officer=is_officer)
 
         # Log dues payment to ledger if marked paid
-        if dues_paid:
+        if dues_paid and not staff:
             record_dues_payment_in_ledger(name.strip(), season=season, is_officer=is_officer)
 
         return True
@@ -2069,6 +2083,30 @@ def sync_all_members_trips_attended(is_officer: bool = False) -> int:
 
 # --- GOOGLE FORM PARSING & LIVE SYNC (LINKED WITH QUESTIONS/CONCERNS) ---
 
+def parse_signup_date(val) -> str:
+    """Parse various timestamp/date string formats to YYYY-MM-DD."""
+    if not val or pd.isnull(val):
+        return ""
+    s = str(val).strip()
+    if not s or s.lower() in ["nan", "none", "null"]:
+        return ""
+    try:
+        dt = pd.to_datetime(s)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m2 = re.search(r"(\d{1,2})/(\d{1,2})/(\d{2,4})", s)
+    if m2:
+        yr = int(m2.group(3))
+        if yr < 100:
+            yr += 2000
+        return f"{yr:04d}-{int(m2.group(1)):02d}-{int(m2.group(2)):02d}"
+    return s[:10]
+
+
 def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CURRENT_SEASON, is_officer: bool = False) -> tuple[bool, str, int]:
     """
     Intelligently map Google Form column headers and sync entries into the roster.
@@ -2083,7 +2121,9 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
         col_map = {}
         for col in df_form.columns:
             c_low = col.lower().strip()
-            if "email" in c_low and "email" not in col_map:
+            if ("timestamp" in c_low or "date" in c_low or "time" in c_low) and "timestamp" not in col_map:
+                col_map["timestamp"] = col
+            elif "email" in c_low and "email" not in col_map:
                 col_map["email"] = col
             elif ("name" in c_low or "first and last" in c_low) and "name" not in col_map:
                 col_map["name"] = col
@@ -2128,6 +2168,8 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
             name_val = str(row.get(col_map.get("name", ""), "")).strip()
             email_val = str(row.get(col_map.get("email", ""), "")).strip()
             phone_val = str(row.get(col_map.get("phone", ""), "")).strip()
+            raw_ts = str(row.get(col_map.get("timestamp", ""), "")).strip()
+            form_signup_date = parse_signup_date(raw_ts)
             
             # Extract year
             raw_year = str(row.get(col_map.get("year", ""), "")).strip()
@@ -2216,6 +2258,10 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                     _queue_dues_if_missing(name_val.title())
                 if tshirt_size != "None":
                     all_members.loc[idx, "TShirtSize"] = tshirt_size
+                if form_signup_date:
+                    curr_sd = str(all_members.loc[idx, "SignupDate"]).strip() if "SignupDate" in all_members.columns and pd.notnull(all_members.loc[idx, "SignupDate"]) else ""
+                    if not curr_sd or curr_sd.lower() in ["nan", "none"]:
+                        all_members.loc[idx, "SignupDate"] = form_signup_date
                 updated_count += 1
             else:
                 # Add new member
@@ -2232,10 +2278,12 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
                     "SkiBoard": clean_skiboard,
                     "DuesPaid": dues_paid,
                     "Slack": False,
+                    "Staff": False,
                     "TShirtSize": tshirt_size,
                     "CompTeam": False,
                     "TripsAttended": "",
-                    "Notes": clean_notes
+                    "Notes": clean_notes,
+                    "SignupDate": form_signup_date or date.today().strftime("%Y-%m-%d")
                 }])
                 all_members = pd.concat([all_members, new_row], ignore_index=True)
                 if dues_paid:
@@ -2359,24 +2407,38 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
         df = load_trips(season=None, is_officer=is_officer)
         next_id = f"TRIP-{len(df) + 1:03d}"
 
-        # When creating a competition trip, automatically add all members on the comp team
+        # When creating any trip, automatically add all active Staff members
         actual_season = season if season and season != "All Seasons" else CURRENT_SEASON
+        members_season_df = load_members(season=actual_season, is_officer=is_officer)
+        staff_df = members_season_df[members_season_df["Staff"] == True] if "Staff" in members_season_df.columns else pd.DataFrame()
+        if staff_df.empty:
+            all_m = load_members(season=None, is_officer=is_officer)
+            staff_df = all_m[all_m["Staff"] == True] if "Staff" in all_m.columns else pd.DataFrame()
+
+        staff_members_to_signup = []
+        if not staff_df.empty:
+            staff_names = [str(n).strip() for n in staff_df["Name"].dropna().tolist() if str(n).strip()]
+            combined_roster = list(dict.fromkeys((attendee_roster or []) + staff_names))
+            attendee_roster = combined_roster
+            staff_members_to_signup = staff_df.to_dict("records")
+
+        # When creating a competition trip, automatically add all members on the comp team
         comp_members_to_signup = []
         if trip_type == "Competition":
-            members_season_df = load_members(season=actual_season, is_officer=is_officer)
-            comp_df = members_season_df[members_season_df["CompTeam"] == True]
+            comp_df = members_season_df[members_season_df["CompTeam"] == True] if "CompTeam" in members_season_df.columns else pd.DataFrame()
             if comp_df.empty:
                 # Check across all members if current season hasn't designated comp members yet
                 all_m = load_members(season=None, is_officer=is_officer)
-                comp_df = all_m[all_m["CompTeam"] == True]
+                comp_df = all_m[all_m["CompTeam"] == True] if "CompTeam" in all_m.columns else pd.DataFrame()
 
             if not comp_df.empty:
                 comp_names = [str(n).strip() for n in comp_df["Name"].dropna().tolist() if str(n).strip()]
                 combined_roster = list(dict.fromkeys((attendee_roster or []) + comp_names))
                 attendee_roster = combined_roster
-                if len(attendee_roster) > attendees:
-                    attendees = len(attendee_roster)
                 comp_members_to_signup = comp_df.to_dict("records")
+
+        if len(attendee_roster) > attendees:
+            attendees = len(attendee_roster)
 
         total_cost = float(cabin + food + tickets + gas)
         funding_amt = float(school_funding) if school_funding is not None else 0.0
@@ -2411,11 +2473,30 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
         df = pd.concat([df, new_trip], ignore_index=True)
         save_trips(df, is_officer=is_officer)
 
-        # Add comp members to trip_signups.csv
-        if comp_members_to_signup:
+        # Add staff and comp members to trip_signups.csv
+        auto_members_to_signup = []
+        seen_auto_names = set()
+        for r_rec in (staff_members_to_signup + comp_members_to_signup):
+            r_name = str(r_rec.get("Name", "")).strip().title()
+            if r_name and r_name.lower() not in seen_auto_names:
+                seen_auto_names.add(r_name.lower())
+                auto_members_to_signup.append(r_rec)
+
+        if auto_members_to_signup:
             all_signups = load_trip_signups(season=None, is_officer=is_officer)
             signup_rows = []
-            for c_rec in comp_members_to_signup:
+            max_sid = 0
+            for s in all_signups["SignupID"].dropna():
+                st_s = str(s).strip()
+                if st_s.startswith("SIGNUP-"):
+                    try:
+                        n_val = int(st_s.split("-")[1])
+                        if n_val > max_sid:
+                            max_sid = n_val
+                    except Exception:
+                        pass
+
+            for c_rec in auto_members_to_signup:
                 c_name = str(c_rec.get("Name", "")).strip().title()
                 c_phone = str(c_rec.get("Phone", "")).strip()
                 if c_phone.lower() == "nan":
@@ -2423,7 +2504,9 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                 # Avoid duplicate signup for this trip
                 is_signed_up = not all_signups[(all_signups["TripID"] == next_id) & (all_signups["Name"].str.lower() == c_name.lower())].empty
                 if not is_signed_up:
-                    s_id = f"SIGNUP-{len(all_signups) + len(signup_rows) + 1:03d}"
+                    is_staff_mem = _is_truthy(c_rec.get("Staff", False))
+                    q_note = "Staff member automatic registration" if is_staff_mem else "Competition Team member automatic registration"
+                    s_id = f"SIGNUP-{max_sid + len(signup_rows) + 1:03d}"
                     signup_rows.append({
                         "SignupID": s_id,
                         "TripID": next_id,
@@ -2432,7 +2515,7 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                         "Name": c_name,
                         "Phone": c_phone,
                         "DrivingCapacity": "Cannot drive",
-                        "Questions": "Competition Team member automatic registration",
+                        "Questions": q_note,
                         "PaymentReceived": False,
                         "SignupDate": date.today().strftime("%Y-%m-%d")
                     })
@@ -2713,11 +2796,41 @@ def load_trip_signups(trip_id_or_name: str = None, season: str = CURRENT_SEASON,
     try:
         if "PaymentReceived" not in df.columns:
             df["PaymentReceived"] = False
-        df["PaymentReceived"] = df["PaymentReceived"].fillna(False).astype(bool)
+        df["PaymentReceived"] = df["PaymentReceived"].apply(_is_truthy)
 
         for col in ["SignupID", "TripID", "TripName", "Season", "Name", "Phone", "DrivingCapacity", "Questions", "SignupDate"]:
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str)
+
+        # Ensure unique SignupIDs across all rows
+        if "SignupID" in df.columns and not df.empty:
+            seen_sids = set()
+            max_sid_num = 0
+            for s in df["SignupID"]:
+                st_s = str(s).strip()
+                if st_s.startswith("SIGNUP-"):
+                    try:
+                        n = int(st_s.split("-")[1])
+                        if n > max_sid_num:
+                            max_sid_num = n
+                    except Exception:
+                        pass
+            new_sids = []
+            sid_changed = False
+            for s in df["SignupID"]:
+                st_s = str(s).strip()
+                if not st_s or st_s in seen_sids:
+                    max_sid_num += 1
+                    st_s = f"SIGNUP-{max_sid_num:03d}"
+                    sid_changed = True
+                seen_sids.add(st_s)
+                new_sids.append(st_s)
+            if sid_changed:
+                df["SignupID"] = new_sids
+                try:
+                    df.to_csv(TRIP_SIGNUPS_FILE if is_officer else DEMO_TRIP_SIGNUPS_FILE, index=False)
+                except Exception:
+                    pass
 
         if season and season != "All Seasons":
             df = df[df["Season"] == season]
@@ -2856,6 +2969,7 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
     Save in-table edits from st.data_editor for trip signups (e.g. Payment Received checkbox).
     Automatically logs an Income, Trip Payment entry in the ledger when Payment Received is checked,
     and removes the corresponding ledger entry when Payment Received is unchecked (revoked).
+    Persists updates directly to CSV and Google Sheets.
     """
     try:
         full_df = load_trip_signups(season=None, is_officer=is_officer)
@@ -2872,14 +2986,6 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
         }
         df_to_merge = edited_df.rename(columns=col_rename_back).copy()
 
-        def _to_bool(val) -> bool:
-            if isinstance(val, (bool, np.bool_)):
-                return bool(val)
-            if isinstance(val, (int, np.integer, float, np.floating)):
-                return val != 0 and not np.isnan(val)
-            s = str(val).strip().lower()
-            return s in ["true", "1", "yes", "y", "t"]
-
         # Pre-lookup trip details for ticket price calculation and fallback trip name
         trips_df = load_trips(season=None, is_officer=is_officer)
         trip_price = None
@@ -2893,17 +2999,26 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
                 t_att = max(1, int(t_row.get("Attendees", 1)))
                 trip_price = round(t_cost / t_att, 2) if t_cost > 0 else 95.0
 
-        full_df.set_index("SignupID", inplace=True)
-        df_to_merge.set_index("SignupID", inplace=True)
+        # Match each edited row safely by SignupID or Name
+        for _, row in df_to_merge.iterrows():
+            sid = str(row.get("SignupID", "")).strip()
+            name_val = str(row.get("Name", "")).strip()
 
-        # Detect newly checked or unchecked Payment Received boxes and update ledger
-        for sid, row in df_to_merge.iterrows():
-            if sid in full_df.index:
-                was_paid = _to_bool(full_df.loc[sid, "PaymentReceived"]) if "PaymentReceived" in full_df.columns else False
-                now_paid = _to_bool(row.get("PaymentReceived", False))
-                athlete_name = str(row.get("Name", full_df.loc[sid, "Name"])).strip().title()
-                trip_name = str(full_df.loc[sid, "TripName"]).strip() if pd.notnull(full_df.loc[sid, "TripName"]) and str(full_df.loc[sid, "TripName"]).strip() else fallback_trip_name
-                athlete_season = str(full_df.loc[sid, "Season"]).strip() if "Season" in full_df.columns and pd.notnull(full_df.loc[sid, "Season"]) else CURRENT_SEASON
+            match_mask = pd.Series(False, index=full_df.index)
+            if sid:
+                match_mask = full_df["SignupID"].astype(str).str.strip() == sid
+            if not match_mask.any() and name_val:
+                t_mask = (full_df["TripID"].astype(str).str.strip() == str(trip_id).strip()) if trip_id else pd.Series(True, index=full_df.index)
+                n_mask = full_df["Name"].astype(str).str.lower().str.strip() == name_val.lower()
+                match_mask = t_mask & n_mask
+
+            if match_mask.any():
+                target_idx = full_df[match_mask].index[0]
+                was_paid = _is_truthy(full_df.loc[target_idx, "PaymentReceived"])
+                now_paid = _is_truthy(row.get("PaymentReceived", False))
+                athlete_name = str(row.get("Name", full_df.loc[target_idx, "Name"])).strip().title()
+                trip_name = str(full_df.loc[target_idx, "TripName"]).strip() if pd.notnull(full_df.loc[target_idx, "TripName"]) and str(full_df.loc[target_idx, "TripName"]).strip() else fallback_trip_name
+                athlete_season = str(full_df.loc[target_idx, "Season"]).strip() if pd.notnull(full_df.loc[target_idx, "Season"]) and str(full_df.loc[target_idx, "Season"]).strip() else CURRENT_SEASON
 
                 if not was_paid and now_paid:
                     record_trip_payment_in_ledger(
@@ -2922,12 +3037,18 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
                         is_officer=is_officer
                     )
 
-        for col in ["Name", "Phone", "DrivingCapacity", "Questions", "PaymentReceived"]:
-            if col in df_to_merge.columns:
-                full_df.update(df_to_merge[[col]])
+                # Update row fields on full_df
+                full_df.loc[target_idx, "PaymentReceived"] = now_paid
+                for c in ["Phone", "DrivingCapacity", "Questions"]:
+                    if c in row and pd.notnull(row[c]):
+                        full_df.loc[target_idx, c] = str(row[c])
 
-        full_df.reset_index(inplace=True)
         save_trip_signups(full_df, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"Error saving edited trip signups: {e}")

@@ -16,7 +16,7 @@ from utils.data_manager import (
     fetch_and_sync_trip_form_sheet, parse_and_sync_trip_form_df,
     add_trip_attendee, delete_trip_attendee, delete_multiple_trip_attendees,
     record_trip_payment_in_ledger, remove_trip_payment_from_ledger,
-    update_trip_status, generate_trips_ical
+    update_trip_status, generate_trips_ical, _is_truthy
 )
 from config import (
     DESTINATIONS, TRIP_TYPES, TRIP_STATUS_OPTIONS, DEFAULT_MPG, DEFAULT_GAS_PRICE,
@@ -235,9 +235,17 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 default_nights = dest_meta["default_nights"]
                 autofill_miles = dest_meta["round_trip_miles"]
 
+            target_s = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
+            staff_m = load_members(season=target_s, is_officer=is_officer)
+            staff_m = staff_m[staff_m["Staff"] == True] if "Staff" in staff_m.columns else pd.DataFrame()
+            if staff_m.empty:
+                all_m = load_members(season=None, is_officer=is_officer)
+                staff_m = all_m[all_m["Staff"] == True] if "Staff" in all_m.columns else pd.DataFrame()
+            if not staff_m.empty:
+                st.info(f"**Staff Auto-Enroll**: All **{len(staff_m)}** active Staff member(s) will be automatically added to this trip roster.")
+
             trip_type = st.radio("Trip Type", TRIP_TYPES, horizontal=True, key="ct_type")
             if trip_type == "Competition":
-                target_s = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
                 comp_m = load_members(season=target_s, is_officer=is_officer)
                 comp_m = comp_m[comp_m["CompTeam"] == True]
                 if comp_m.empty:
@@ -962,7 +970,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 ]
 
                 # Ensure strict compatible types for Streamlit data_editor column_configs
-                editor_signups["Payment Received"] = editor_signups["Payment Received"].fillna(False).astype(bool)
+                editor_signups["Payment Received"] = editor_signups["Payment Received"].apply(_is_truthy)
                 for txt_col in ["ID", "Name", "Phone", "Questions or Concerns?", "Sign-Up Date"]:
                     editor_signups[txt_col] = (
                         editor_signups[txt_col]

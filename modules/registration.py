@@ -6,12 +6,12 @@ dropdown for T-Shirt Size (None, S, M, L, XL), and includes membership form Note
 
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, timedelta
 from utils.data_manager import (
     load_members, save_members, add_member, delete_member, delete_multiple_members,
     save_edited_members, fetch_and_sync_google_sheet, parse_and_sync_google_form_df,
     reset_active_season_roster, get_merch_inventory_summary,
-    load_ledger, reconcile_membership_dues_with_ledger
+    load_ledger, reconcile_membership_dues_with_ledger, _is_truthy
 )
 from config import (
     ANNUAL_DUES_AMOUNT, CURRENT_SEASON, SHIRT_SIZES,
@@ -81,23 +81,37 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
     # --- TOP ROW: REGISTRATION METRICS DASHBOARD ---
     total_members = len(members_df)
-    paid_members = len(members_df[members_df["DuesPaid"] == True])
     comp_team_count = len(members_df[members_df["CompTeam"] == True])
     shirts_claimed = len(members_df[members_df["TShirtSize"].isin(["S", "M", "L", "XL"])])
 
-    pct_paid = (paid_members / total_members * 100) if total_members > 0 else 0
-    projected_dues = total_members * ANNUAL_DUES_AMOUNT
+    # Staff members are exempt from paying dues and are excluded from the dues collection rate calculation
+    is_staff_series = members_df["Staff"].apply(_is_truthy) if "Staff" in members_df.columns else pd.Series(False, index=members_df.index)
+    paying_members_df = members_df[~is_staff_series]
+    total_paying_members = len(paying_members_df)
+    paid_members = len(paying_members_df[paying_members_df["DuesPaid"] == True])
+
+    pct_paid = (paid_members / total_paying_members * 100) if total_paying_members > 0 else 0
+    projected_dues = total_paying_members * ANNUAL_DUES_AMOUNT
     actual_dues_collected = paid_members * ANNUAL_DUES_AMOUNT
 
-    # Calculate new sign-ups for Card 1 insight
+    # Calculate new sign-ups within the last 2 weeks for Card 1 insight
     all_members_df = load_members(season=None, is_officer=is_officer)
-    if selected_season != "All Seasons":
-        prior_members = all_members_df[all_members_df["Season"] != selected_season]
-        prior_names = set(prior_members["Name"].astype(str).str.lower().str.strip())
-        current_names = members_df["Name"].astype(str).str.lower().str.strip().tolist()
-        new_signups = sum(1 for n in current_names if n not in prior_names)
-    else:
-        new_signups = len(all_members_df[all_members_df["Season"] == CURRENT_SEASON])
+    target_members_for_insight = members_df if selected_season != "All Seasons" else all_members_df
+    cutoff_date = date.today() - timedelta(days=14)
+
+    def _is_recent_signup(date_val) -> bool:
+        if not date_val or pd.isnull(date_val):
+            return False
+        s = str(date_val).strip()
+        if not s or s.lower() in ["nan", "none", "null", ""]:
+            return False
+        try:
+            d = pd.to_datetime(s).date()
+            return d >= cutoff_date
+        except Exception:
+            return False
+
+    new_signups = sum(1 for d in target_members_for_insight.get("SignupDate", []) if _is_recent_signup(d))
 
     # Calculate % of total shirts remaining for Card 3 insight
     merch_summary = get_merch_inventory_summary(season=selected_season if selected_season != "All Seasons" else None, is_officer=is_officer)
@@ -143,7 +157,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
     m2.metric(
         label="Dues Collection Rate",
         value=f"{pct_paid:.1f}%",
-        delta=f"\\${actual_dues_collected:,.0f} of \\${projected_dues:,.0f}" if total_members > 0 else None,
+        delta=f"\\${actual_dues_collected:,.0f} of \\${projected_dues:,.0f}" if total_paying_members > 0 else None,
         delta_color=m2_color,
         delta_arrow="off"
     )
@@ -222,7 +236,8 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     tshirt_size = st.selectbox("Complementary T-Shirt Size", SHIRT_SIZES, index=0)
 
                 with c3:
-                    dues_paid = st.checkbox("Dues Paid ($60)", value=True)
+                    is_staff = st.checkbox("Staff Member (Dues Exempt & Added to Trips)", value=False)
+                    dues_paid = st.checkbox("Dues Paid ($60)", value=True, disabled=is_staff, help="Staff members are exempt from dues")
                     slack_joined = st.checkbox("Joined Slack", value=False)
                     comp_team = st.checkbox("Competition Team (USCSA Racer)", value=False)
                     notes = st.text_input("Membership Form Notes", placeholder="e.g. Dietary restriction, carpool driver, gear inquiries")
@@ -234,9 +249,9 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         st.error("Member Name is required.")
                     else:
                         if add_member(
-                            name, email, phone, dues_paid, tshirt_size, comp_team, notes,
+                            name, email, phone, False if is_staff else dues_paid, tshirt_size, comp_team, notes,
                             season=target_reg_season, year=year_val, ski_board=skiboard_val,
-                            slack=slack_joined, is_officer=is_officer
+                            slack=slack_joined, staff=is_staff, is_officer=is_officer
                         ):
                             st.success(f"Added '{name}' to the {target_reg_season} roster.")
                             st.rerun()
@@ -291,7 +306,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
         with f1:
             search_query = st.text_input("Search Roster", placeholder="Search by name, email, year, ski/board, note, or trip...")
         with f2:
-            dues_filter = st.selectbox("Dues Filter", ["All", "Paid Only", "Unpaid Only"])
+            dues_filter = st.selectbox("Dues Filter", ["All", "Paid Only", "Unpaid Only", "Staff Only (Exempt)"])
         with f3:
             slack_filter = st.selectbox("Slack Filter", ["All", "In Slack Only", "Not in Slack"])
 
@@ -308,7 +323,9 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
         if dues_filter == "Paid Only":
             filtered_members = filtered_members[filtered_members["DuesPaid"] == True]
         elif dues_filter == "Unpaid Only":
-            filtered_members = filtered_members[filtered_members["DuesPaid"] == False]
+            filtered_members = filtered_members[(filtered_members["DuesPaid"] == False) & (filtered_members["Staff"] != True)]
+        elif dues_filter == "Staff Only (Exempt)":
+            filtered_members = filtered_members[filtered_members["Staff"] == True]
 
         if slack_filter == "In Slack Only":
             filtered_members = filtered_members[filtered_members["Slack"] == True]
@@ -341,22 +358,23 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
         st.caption(f"Showing **{len(filtered_members)}** of **{len(members_df)}** members &bull; *Click checkboxes, select shirt sizes, or edit notes directly inside the table.*")
 
-        # Prepare editable DataFrame with Year, Ski/Board, Slack, TShirtSize dropdown and Notes column
+        # Prepare editable DataFrame with Year, Ski/Board, Slack, Staff, TShirtSize dropdown and Notes column
         display_cols = [
-            "Name", "Year", "SkiBoard", "Slack", "DuesPaid", "CompTeam",
-            "TShirtSize", "Email", "Phone", "TripsAttended", "Notes", "Season", "MemberID"
+            "Name", "Year", "SkiBoard", "Slack", "Staff", "DuesPaid", "CompTeam",
+            "TShirtSize", "Email", "Phone", "TripsAttended", "Notes", "SignupDate", "Season", "MemberID"
         ]
         editor_input_df = filtered_members[display_cols].copy()
         editor_input_df.columns = [
-            "Name", "Year", "Ski/Board", "Slack", "Dues Paid", "Comp Team",
-            "T-Shirt Size", "Email", "Phone", "Trips Attended", "Notes", "Season", "ID"
+            "Name", "Year", "Ski/Board", "Slack", "Staff", "Dues Paid", "Comp Team",
+            "T-Shirt Size", "Email", "Phone", "Trips Attended", "Notes", "Sign-Up Date", "Season", "ID"
         ]
 
         # Ensure strict compatible types for Streamlit data_editor column_configs
-        editor_input_df["Dues Paid"] = editor_input_df["Dues Paid"].fillna(False).astype(bool)
-        editor_input_df["Slack"] = editor_input_df["Slack"].fillna(False).astype(bool)
-        editor_input_df["Comp Team"] = editor_input_df["Comp Team"].fillna(False).astype(bool)
-        for txt_col in ["ID", "Season", "Name", "Email", "Phone", "Year", "Ski/Board", "T-Shirt Size", "Trips Attended", "Notes"]:
+        editor_input_df["Dues Paid"] = editor_input_df["Dues Paid"].apply(_is_truthy)
+        editor_input_df["Slack"] = editor_input_df["Slack"].apply(_is_truthy)
+        editor_input_df["Staff"] = editor_input_df["Staff"].apply(_is_truthy)
+        editor_input_df["Comp Team"] = editor_input_df["Comp Team"].apply(_is_truthy)
+        for txt_col in ["ID", "Season", "Name", "Email", "Phone", "Year", "Ski/Board", "T-Shirt Size", "Trips Attended", "Notes", "Sign-Up Date"]:
             editor_input_df[txt_col] = (
                 editor_input_df[txt_col]
                 .fillna("")
@@ -368,6 +386,11 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
         edited_roster = st.data_editor(
             editor_input_df,
             column_config={
+                "Staff": st.column_config.CheckboxColumn(
+                    "Staff",
+                    help="Click to designate staff member (exempt from dues & auto-added to trips)",
+                    default=False
+                ),
                 "Dues Paid": st.column_config.CheckboxColumn(
                     "Dues Paid",
                     help="Click to mark dues paid ($60)",
@@ -404,6 +427,11 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     "Notes",
                     help="Membership form questions, diet, carpools, or comments",
                 ),
+                "Sign-Up Date": st.column_config.TextColumn(
+                    "Sign-Up Date",
+                    disabled=True,
+                    help="Date member registered",
+                ),
                 "ID": st.column_config.TextColumn("ID", disabled=True),
                 "Season": st.column_config.TextColumn("Season", disabled=True),
                 "Name": st.column_config.TextColumn("Name"),
@@ -411,7 +439,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 "Phone": st.column_config.TextColumn("Phone"),
                 "Trips Attended": st.column_config.TextColumn("Trips Attended"),
             },
-            disabled=["ID", "Season"] if (is_officer and can_edit) else True,
+            disabled=["ID", "Season", "Sign-Up Date"] if (is_officer and can_edit) else True,
             hide_index=True,
             width="stretch",
             height=450,
