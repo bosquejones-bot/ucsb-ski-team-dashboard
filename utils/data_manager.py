@@ -1733,6 +1733,7 @@ def save_edited_members(edited_df: pd.DataFrame, current_view_season: str = None
 
         full_df.reset_index(inplace=True)
         save_members(full_df, is_officer=is_officer)
+        sync_officers_from_staff(is_officer=is_officer)
         try:
             import streamlit as st
             st.cache_data.clear()
@@ -1772,6 +1773,8 @@ def add_member(name: str, email: str, phone: str, dues_paid: bool, tshirt_size: 
         }])
         all_df = pd.concat([all_df, new_member], ignore_index=True)
         save_members(all_df, is_officer=is_officer)
+        if staff:
+            sync_officers_from_staff(is_officer=is_officer)
 
         # Log dues payment to ledger if marked paid
         if dues_paid and not staff:
@@ -1855,6 +1858,7 @@ def delete_multiple_members(member_ids: list[str], is_officer: bool = False) -> 
         # Drop the deleted members from members.csv
         remaining_members = all_members[~all_members["MemberID"].isin(clean_ids)].copy().reset_index(drop=True)
         save_members(remaining_members, is_officer=is_officer)
+        sync_officers_from_staff(is_officer=is_officer)
         try:
             import streamlit as st
             st.cache_data.clear()
@@ -3372,11 +3376,26 @@ def delete_trip_attendee(signup_id: str, is_officer: bool = False) -> bool:
 
 # --- OFFICER ROSTER & TO-DO LIST OPERATIONS ---
 
-def load_officers(is_officer: bool = False) -> list:
-    """Load the list of club officers."""
+def sync_officers_from_staff(is_officer: bool = False) -> list:
+    """
+    Synchronize the officers list with members tagged as Staff (Staff == True).
+    The Staff tag in the membership data serves as the source of truth for the officer board.
+    """
     ensure_data_initialized()
-    target_file = get_officers_file(is_officer)
     try:
+        members_df = load_members(season=None, is_officer=is_officer)
+        if not members_df.empty and "Staff" in members_df.columns:
+            staff_mask = members_df["Staff"].apply(_is_truthy)
+            staff_members = members_df[staff_mask]
+            if not staff_members.empty:
+                staff_names = sorted(list(dict.fromkeys(
+                    str(name).strip() for name in staff_members["Name"] if str(name).strip()
+                )))
+                if staff_names:
+                    save_officers(staff_names, is_officer=is_officer)
+                    return staff_names
+        # Fallback to officers file if members have no staff tagged
+        target_file = get_officers_file(is_officer)
         if os.path.exists(target_file):
             df = pd.read_csv(target_file)
             if "Officer" in df.columns:
@@ -3387,8 +3406,13 @@ def load_officers(is_officer: bool = False) -> list:
         save_officers(default_pool, is_officer=is_officer)
         return list(default_pool)
     except Exception as e:
-        print(f"Error loading officers: {e}")
+        print(f"Error syncing officers from staff: {e}")
         return list(OFFICERS if is_officer else DEMO_OFFICERS)
+
+
+def load_officers(is_officer: bool = False) -> list:
+    """Load the list of club officers, linked directly to members tagged as Staff."""
+    return sync_officers_from_staff(is_officer=is_officer)
 
 
 def save_officers(officers: list, is_officer: bool = False) -> bool:
@@ -3408,10 +3432,29 @@ def save_officers(officers: list, is_officer: bool = False) -> bool:
 
 
 def add_officer(name: str, is_officer: bool = False) -> tuple:
-    """Add a new officer to the roster."""
+    """
+    Add a new officer to the roster and mark their Staff tag as True in membership data.
+    """
     clean_name = str(name).strip()
     if not clean_name:
         return False, "Officer name cannot be empty."
+
+    # First update membership data if this person is a registered member
+    try:
+        members_df = load_members(season=None, is_officer=is_officer)
+        if not members_df.empty:
+            m_mask = members_df["Name"].astype(str).str.strip().str.lower() == clean_name.lower()
+            if not m_mask.any() and " " not in clean_name:
+                m_mask = members_df["Name"].astype(str).str.strip().str.lower().str.startswith(clean_name.lower() + " ")
+            if m_mask.any():
+                members_df.loc[m_mask, "Staff"] = True
+                save_members(members_df, is_officer=is_officer)
+                synced = sync_officers_from_staff(is_officer=is_officer)
+                return True, f"'{clean_name}' designated as Staff and added to the officer board."
+    except Exception as ex:
+        print(f"Error updating member Staff tag during add_officer: {ex}")
+
+    # Fallback to direct officers file if not a registered member
     current_officers = load_officers(is_officer=is_officer)
     if any(o.lower() == clean_name.lower() for o in current_officers):
         return False, f"Officer '{clean_name}' already exists in the roster."
@@ -3422,7 +3465,9 @@ def add_officer(name: str, is_officer: bool = False) -> tuple:
 
 
 def delete_officer(name: str, is_officer: bool = False) -> tuple:
-    """Remove an officer from the roster."""
+    """
+    Remove an officer from the roster and uncheck their Staff tag in membership data.
+    """
     clean_name = str(name).strip()
     current_officers = load_officers(is_officer=is_officer)
     matching = [o for o in current_officers if o.lower() == clean_name.lower()]
@@ -3430,10 +3475,24 @@ def delete_officer(name: str, is_officer: bool = False) -> tuple:
         return False, f"Officer '{clean_name}' not found in roster."
     if len(current_officers) <= 1:
         return False, "Cannot remove the last remaining officer."
+
+    # Unlink Staff tag in membership data
+    try:
+        members_df = load_members(season=None, is_officer=is_officer)
+        if not members_df.empty:
+            m_mask = members_df["Name"].astype(str).str.strip().str.lower() == clean_name.lower()
+            if not m_mask.any() and " " not in clean_name:
+                m_mask = members_df["Name"].astype(str).str.strip().str.lower().str.startswith(clean_name.lower() + " ")
+            if m_mask.any():
+                members_df.loc[m_mask, "Staff"] = False
+                save_members(members_df, is_officer=is_officer)
+    except Exception as ex:
+        print(f"Error unlinking member Staff tag during delete_officer: {ex}")
+
     current_officers = [o for o in current_officers if o.lower() != clean_name.lower()]
-    if save_officers(current_officers, is_officer=is_officer):
-        return True, f"Officer '{clean_name}' removed successfully."
-    return False, "Failed to save updated officer list."
+    save_officers(current_officers, is_officer=is_officer)
+    sync_officers_from_staff(is_officer=is_officer)
+    return True, f"Officer '{clean_name}' removed from officer board and unlinked from Staff."
 
 
 def load_todos(season: str = None, status: str = None, is_officer: bool = False) -> pd.DataFrame:

@@ -244,13 +244,16 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
         officers_list = ["President", "Vice President", "Treasurer", "Trip Lead"]
 
     if is_officer and can_edit:
-        st.caption("All fields below are directly editable. Click any cell to modify Date, Entity, Type, Category, Amount, Logged By, Notes, or Season. Edits save automatically.")
+        st.caption("All fields below are directly editable. Click any cell to modify Date, Entity, Type, Category, Amount, Logged By, Notes, or Season. Click 'Save All Changes' below when finished.")
     elif is_officer:
         st.caption("Officer viewing mode active (read-only). Enable the Editing toggle in the sidebar to modify transaction details directly.")
     else:
         st.caption("Viewing ledger in read-only mode. Enter the officer password in the sidebar to edit transactions.")
 
     disabled_cols = ["Row"] if (is_officer and can_edit) else True
+
+    ledger_editor_reset_key = f"reset_ledger_{selected_season}_{type_filter}_{cat_filter}"
+    ledger_editor_ver = st.session_state.get(ledger_editor_reset_key, 0)
 
     edited_ledger = st.data_editor(
         display_df,
@@ -311,16 +314,41 @@ def render_ledger_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = 
         hide_index=True,
         width="stretch",
         height=480,
-        key=f"editor_ledger_{selected_season}_{type_filter}_{cat_filter}"
+        key=f"editor_ledger_{selected_season}_{type_filter}_{cat_filter}_{ledger_editor_ver}"
     )
 
-    # Detect in-table changes and persist immediately
-    if is_officer and can_edit and not edited_ledger.equals(display_df):
-        if save_edited_ledger(edited_ledger, is_officer=is_officer):
-            st.success("Ledger entry updated successfully.")
-            st.rerun()
-        else:
-            st.error("Failed to save changes to the ledger.")
+    # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
+    if is_officer and can_edit:
+        has_ledger_changes = not edited_ledger.equals(display_df)
+        if has_ledger_changes:
+            num_ledger_changed = int((edited_ledger.fillna("") != display_df.fillna("")).any(axis=1).sum())
+            row_l_lbl = "transaction" if num_ledger_changed == 1 else "transactions"
+            st.warning(f"You have unsaved changes ({num_ledger_changed} {row_l_lbl} modified). Click Save All Changes to commit to Google Sheets and local database.")
+
+            c_save_l, c_disc_l, _ = st.columns([1.8, 1.2, 4.0])
+            with c_save_l:
+                if st.button(
+                    f"Save All Changes ({num_ledger_changed})",
+                    type="primary",
+                    key=f"btn_save_ledger_{selected_season}_{type_filter}_{cat_filter}",
+                    width="stretch"
+                ):
+                    with st.spinner("Saving ledger updates to Google Sheets and local database..."):
+                        if save_edited_ledger(edited_ledger, is_officer=is_officer):
+                            st.session_state[ledger_editor_reset_key] = ledger_editor_ver + 1
+                            st.success("Ledger entry updated successfully.")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save changes to the ledger. Please try again.")
+            with c_disc_l:
+                if st.button(
+                    "Discard",
+                    key=f"btn_discard_ledger_{selected_season}_{type_filter}_{cat_filter}",
+                    width="stretch",
+                    help="Discard unsaved edits and reload original data"
+                ):
+                    st.session_state[ledger_editor_reset_key] = ledger_editor_ver + 1
+                    st.rerun()
 
     # Export & Management Tools
     col_dl, col_del = st.columns([3, 1])

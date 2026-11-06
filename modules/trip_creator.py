@@ -958,7 +958,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         filtered_signups["Questions"].astype(str).str.lower().str.contains(q, na=False)
                     ]
 
-                st.caption(f"Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Toggle the Payment Received checkbox directly inside the table.*")
+                st.caption(f"Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Toggle checkboxes or edit details freely, then click 'Save All Changes' below to persist.*")
 
                 # Prepare editable DataFrame with trip sign-up fields
                 display_cols = ["SignupID", "PaymentReceived", "Name", "Phone", "DrivingCapacity", "Questions", "SignupDate"]
@@ -995,6 +995,8 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     .astype(str)
                 )
 
+                trip_editor_reset_key = f"reset_trip_signups_{selected_trip_id}"
+                trip_editor_ver = st.session_state.get(trip_editor_reset_key, 0)
                 edited_signups_result = st.data_editor(
                     editor_signups,
                     column_config={
@@ -1021,7 +1023,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     hide_index=True,
                     width="stretch",
                     height=420,
-                    key=f"editor_trip_signups_{selected_trip_id}"
+                    key=f"editor_trip_signups_{selected_trip_id}_{trip_editor_ver}"
                 )
 
                 if is_officer and not can_edit:
@@ -1029,10 +1031,38 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 elif not is_officer:
                     st.caption("Viewing trip roster in read-only mode. Enter the officer password in the sidebar to edit payments or driver capacities.")
 
-                if is_officer and can_edit and not edited_signups_result.equals(editor_signups):
-                    if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
-                        st.success("Attendee updates and payment status saved directly to database.")
-                        st.rerun()
+                # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
+                if is_officer and can_edit:
+                    has_signup_changes = not edited_signups_result.equals(editor_signups)
+                    if has_signup_changes:
+                        num_signup_changed = int((edited_signups_result.fillna("") != editor_signups.fillna("")).any(axis=1).sum())
+                        row_lbl = "attendee" if num_signup_changed == 1 else "attendees"
+                        st.warning(f"You have unsaved changes ({num_signup_changed} {row_lbl} modified). Click Save All Changes to commit to Google Sheets and local database.")
+
+                        c_save_s, c_disc_s, _ = st.columns([1.8, 1.2, 4.0])
+                        with c_save_s:
+                            if st.button(
+                                f"Save All Changes ({num_signup_changed})",
+                                type="primary",
+                                key=f"btn_save_signups_{selected_trip_id}",
+                                width="stretch"
+                            ):
+                                with st.spinner("Saving attendee updates and payments to Google Sheets..."):
+                                    if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
+                                        st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                        st.success("Attendee updates and payment status saved directly to database.")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to save changes to Google Sheets. Please try again.")
+                        with c_disc_s:
+                            if st.button(
+                                "Discard",
+                                key=f"btn_discard_signups_{selected_trip_id}",
+                                width="stretch",
+                                help="Discard unsaved edits and reload original data"
+                            ):
+                                st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                st.rerun()
 
                 # Action Bar: CSV Export, Driver Sheet Script Popover & Multi-Attendee Removal
                 c_exp, c_drv, c_rem = st.columns([2.0, 1.8, 1.2])

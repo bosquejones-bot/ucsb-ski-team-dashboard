@@ -41,7 +41,7 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Recent transactions audit trail.
 - **General Ledger & Officer Entry** ([[modules/ledger.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/ledger.py)]):
   - View-only formatted transaction table for general club members.
-  - Officer interactive in-place editable grid powered by `st.data_editor` allowing direct updates to all fields (Date, Season, Type, Category, Amount, Description, Logged By).
+  - Officer interactive in-place editable grid powered by `st.data_editor` allowing direct updates to all fields (Date, Season, Type, Category, Amount, Description, Logged By) with an explicit batch **"Save All Changes"** action bar and unsaved edits indicator, preventing spinner freezing and edit collisions.
   - Single transaction entry form with category selectors and officer attribution.
   - **Google Sheets Live Sync & CSV Ledger Backup**: Dedicated expander enabling officers to synchronize the master ledger directly with a private Google Sheet (`LEDGER_SHEET_URL`), import/restore CSV backups, or download the full master ledger across all seasons with 1 click.
   - **Cold-Boot Cloud Persistence**: Automatically populates `data/ledger.csv` directly from `LEDGER_SHEET_URL` on Streamlit Community Cloud reboots if the container disk starts empty.
@@ -53,7 +53,7 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Live sync tool fetching registration responses from the official Google Sheets form (*"UCSB Ski and Board Team Member Applications 26-27"*), automatically extracting and mapping `"What year are you?"` -> `Year` (with integer cleanup) and `"Do you ski or board?"` -> `SkiBoard` (`Ski`, `Board`, `Both`), leaving `Slack` defaulted to `False` and `CompTeam` defaulted to `False` with completely severed/no link to form input data.
   - Member deletion utilities: Bulk or single deletion via the 'Delete Member from Roster' expander with searchable multiselect, as well as an in-line 'Delete a Member' popover below the table. Automatically cleans up member records in `members.csv`, revokes associated dues payment entries from `ledger.csv`, and cleans up active trip signups in `trip_signups.csv`.
   - Dynamic Trips Attended Synchronization: Integrates automatic ingestion reconciliation in `load_members()` ensuring every member's `TripsAttended` accurately reflects registered trips from `trip_signups.csv` and `trips.csv` (`AttendeeRoster`) strictly scoped to their active season, eliminating cross-season contamination for returning athletes while preserving uncataloged historical trips.
-  - Officer quick-actions: toggle dues payment status, toggle Slack status checkbox, toggle Comp Team status checkbox, and edit member info directly in `st.data_editor`.
+  - Officer quick-actions: toggle dues payment status, toggle Staff status, toggle Slack status checkbox, toggle Comp Team status checkbox, and edit member info directly in `st.data_editor` with batch **"Save All Changes"** confirmation, change count, and discard capability.
 - **Merch Inventory Tracking** ([[modules/merch.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/merch.py)]):
   - Real-time inventory calculation: Initial Stock minus Distributed T-Shirts (from registered members) plus/minus manual adjustments.
   - Inventory breakdown cards for T-Shirts and Sweatshirts across all sizes (S, M, L, XL).
@@ -69,7 +69,7 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Built-in Google Form Sign-Up Generator with dynamic add/delete/edit response fields via `st.data_editor`, dedicated field creation popovers, field removal, and default reset.
   - 1-Click Google Apps Script generator producing customized code matching athlete question fields, formats, and choices.
   - Seamless post-creation workflow automatically collapsing both Section 1 (Trip Details & Budget Logistics) and Section 2 (Built-in Google Form Sign-Up Generator) while automatically expanding the 1-Click Google Apps Script code with a prominent success banner, and providing a 1-click 'Create Another Trip' reset action.
-  - Robust Attendee Tracker with in-table editing via `st.data_editor` featuring strict type sanitization (preventing `StreamlitAPIException` on empty questions/floats), fuzzy searching exclusively for registered active members, payment checkboxes, driver capacity dropdowns, and multi-attendee removal.
+  - Robust Attendee Tracker with in-table editing via `st.data_editor` featuring strict type sanitization (preventing `StreamlitAPIException` on empty questions/floats), fuzzy searching exclusively for registered active members, payment checkboxes, driver capacity dropdowns, batch **"Save All Changes"** confirmation, and multi-attendee removal.
   - Automatic Ledger Integration: toggling the `Payment Received` checkbox creates a corresponding Income `Trip Payment` entry in the General Ledger (calculated from trip cost per skier), and unchecking it removes the entry, functioning identically to the membership dues checkbox.
   - Streamlined Operations Metrics: Clean KPI cards displaying Total Attending Athletes, Trip Cost per Person, Driver Capacity Available, and Pending Payments without noisy delta insights.
   - Interactive Trip Status Management: Added Trip Status dropdown selectors to both the Trip Operations Details card (Tab 1) and each individual Trip Details Card in All Scheduled Trips (Tab 3). Allows officers to easily toggle trip statuses (`Planning`, `Confirmed`, `Completed`, `Cancelled`) with in-place persistence to `trips.csv` via `update_trip_status()`. Locked with tooltips in view-only mode.
@@ -80,6 +80,7 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - Adjustable variables: resort destination, vehicle capacity, gas prices, lodging costs, and ticket fees.
 - **Officer To-Do & Delegation** ([[modules/todo.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/todo.py)]):
   - Task board tracking pending, in-progress, and completed tasks.
+  - Bidirectional link with the Membership Tracker: Officer delegation pool is dynamically synchronized with members tagged as Staff (Staff == True). Adding or removing officers in the To-Do tab updates their Staff status in the membership dataset and vice-versa.
   - Task assignment to one or more officers using multiselect tags.
   - Officer-specific view filtering and completed task archive.
 

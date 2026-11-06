@@ -9,9 +9,22 @@ import pandas as pd
 from datetime import date, datetime, timedelta
 from utils.data_manager import (
     load_todos, add_todo, set_todo_status, delete_todo,
-    load_officers, add_officer, delete_officer
+    load_officers, add_officer, delete_officer, load_members, _is_truthy
 )
 from config import CURRENT_SEASON, THEME_COLORS
+
+
+def _officer_matches_filter(assigned_str: str, filter_officer: str) -> bool:
+    """Check if task assigned_str matches selected filter_officer (full name or first name)."""
+    if not assigned_str or filter_officer == "All Officers":
+        return True
+    assigned_lower = str(assigned_str).lower()
+    filter_lower = filter_officer.strip().lower()
+    if filter_lower in assigned_lower:
+        return True
+    filter_first = filter_lower.split()[0] if filter_lower else ""
+    assigned_tokens = [tok.strip() for tok in assigned_lower.replace(",", " ").split() if tok.strip()]
+    return filter_first in assigned_tokens
 
 
 def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = False, can_edit: bool = None):
@@ -33,20 +46,35 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
             st.markdown("##### Current Officer Board")
             officers_display = " &bull; ".join([f"`{o}`" for o in officers_pool])
             st.markdown(f"**Active Officers ({len(officers_pool)}):** {officers_display}")
-            st.caption("Officers added or removed here update the delegation pool across task creation, task filters, and merch logs.")
+            st.caption("The officer board is linked directly to the **Staff** designation in the Membership Tracker. Any member marked as Staff is automatically an officer.")
+
+            # Load non-staff registered members for easy addition
+            all_members_df = load_members(season=None, is_officer=is_officer)
+            candidate_members = []
+            if not all_members_df.empty:
+                staff_mask = all_members_df["Staff"].apply(_is_truthy) if "Staff" in all_members_df.columns else pd.Series(False, index=all_members_df.index)
+                non_staff = all_members_df[~staff_mask]
+                candidate_members = sorted(list(dict.fromkeys(
+                    str(n).strip() for n in non_staff["Name"].dropna() if str(n).strip()
+                )))
 
             col_add_off, col_del_off = st.columns(2)
 
             with col_add_off:
                 st.markdown("###### Add New Officer")
                 with st.form("form_add_officer", clear_on_submit=True):
-                    new_officer_name = st.text_input("Officer Name or Role", placeholder="e.g. Taylor Smith, Safety Officer")
+                    sel_member = st.selectbox(
+                        "Designate Registered Member as Officer/Staff",
+                        options=["-- Select a registered member --"] + candidate_members
+                    )
+                    custom_officer_name = st.text_input("Or Enter Custom Officer Name / Role", placeholder="e.g. Taylor Smith, Safety Officer")
                     submit_add_off = st.form_submit_button("Add Officer", width="stretch")
                     if submit_add_off:
-                        if not new_officer_name.strip():
-                            st.error("Please enter an officer name.")
+                        chosen_name = sel_member if sel_member != "-- Select a registered member --" else custom_officer_name.strip()
+                        if not chosen_name:
+                            st.error("Please select a registered member or enter an officer name.")
                         else:
-                            ok, msg = add_officer(new_officer_name.strip(), is_officer=is_officer)
+                            ok, msg = add_officer(chosen_name, is_officer=is_officer)
                             if ok:
                                 st.success(msg)
                                 st.rerun()
@@ -142,7 +170,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
 
             filtered_active = active_todos.copy()
             if officer_filter != "All Officers":
-                filtered_active = filtered_active[filtered_active["AssignedTo"].str.contains(officer_filter, na=False)]
+                filtered_active = filtered_active[filtered_active["AssignedTo"].apply(lambda a: _officer_matches_filter(a, officer_filter))]
 
             st.caption(f"Showing **{len(filtered_active)}** active task(s)")
 
@@ -191,7 +219,7 @@ def render_todo_tab(selected_season: str = CURRENT_SEASON, is_officer: bool = Fa
 
             filtered_completed = completed_todos.copy()
             if arch_officer_filter != "All Officers":
-                filtered_completed = filtered_completed[filtered_completed["AssignedTo"].str.contains(arch_officer_filter, na=False)]
+                filtered_completed = filtered_completed[filtered_completed["AssignedTo"].apply(lambda a: _officer_matches_filter(a, arch_officer_filter))]
 
             st.caption(f"Showing **{len(filtered_completed)}** completed task(s)")
 

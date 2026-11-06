@@ -356,7 +356,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 filtered_members["SkiBoard"].astype(str).str.lower().str.contains(q, na=False)
             ]
 
-        st.caption(f"Showing **{len(filtered_members)}** of **{len(members_df)}** members &bull; *Click checkboxes, select shirt sizes, or edit notes directly inside the table.*")
+        st.caption(f"Showing **{len(filtered_members)}** of **{len(members_df)}** members &bull; *Edit cells or toggle checkboxes freely, then click 'Save All Changes' below to persist.*")
 
         # Prepare editable DataFrame with Year, Ski/Board, Slack, Staff, TShirtSize dropdown and Notes column
         display_cols = [
@@ -383,6 +383,8 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             )
 
         # In-Table Interactive Checkboxes & Dropdowns via st.data_editor
+        member_editor_reset_key = f"reset_members_{selected_season}"
+        member_editor_ver = st.session_state.get(member_editor_reset_key, 0)
         edited_roster = st.data_editor(
             editor_input_df,
             column_config={
@@ -443,7 +445,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             hide_index=True,
             width="stretch",
             height=450,
-            key=f"editor_members_{selected_season}"
+            key=f"editor_members_{selected_season}_{member_editor_ver}"
         )
 
         if is_officer and not can_edit:
@@ -451,11 +453,38 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
         elif not is_officer:
             st.caption("Viewing member roster in read-only mode. Enter the officer password in the sidebar to edit dues, sizes, or member details.")
 
-        # Detect in-table changes and persist immediately
-        if is_officer and can_edit and not edited_roster.equals(editor_input_df):
-            if save_edited_members(edited_roster, current_view_season=selected_season, is_officer=is_officer):
-                st.success("Member updates saved directly to database.")
-                st.rerun()
+        # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
+        if is_officer and can_edit:
+            has_member_changes = not edited_roster.equals(editor_input_df)
+            if has_member_changes:
+                num_changed = int((edited_roster.fillna("") != editor_input_df.fillna("")).any(axis=1).sum())
+                row_label = "member" if num_changed == 1 else "members"
+                st.warning(f"You have unsaved changes ({num_changed} {row_label} modified). Click Save All Changes to commit to Google Sheets and local database.")
+
+                c_save, c_discard, _ = st.columns([1.8, 1.2, 4.0])
+                with c_save:
+                    if st.button(
+                        f"Save All Changes ({num_changed})",
+                        type="primary",
+                        key=f"btn_save_members_{selected_season}",
+                        width="stretch"
+                    ):
+                        with st.spinner("Saving member roster to Google Sheets and database..."):
+                            if save_edited_members(edited_roster, current_view_season=selected_season, is_officer=is_officer):
+                                st.session_state[member_editor_reset_key] = member_editor_ver + 1
+                                st.success("Member updates saved successfully to database.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to save changes to Google Sheets. Please try again.")
+                with c_discard:
+                    if st.button(
+                        "Discard",
+                        key=f"btn_discard_members_{selected_season}",
+                        width="stretch",
+                        help="Discard unsaved edits and reload original data"
+                    ):
+                        st.session_state[member_editor_reset_key] = member_editor_ver + 1
+                        st.rerun()
 
         # CSV Export & Quick Delete Action
         c_exp, c_del = st.columns([2, 1.2])
