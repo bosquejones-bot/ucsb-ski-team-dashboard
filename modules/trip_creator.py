@@ -55,6 +55,46 @@ def extract_driver_capacity(driving_val) -> int:
     return 0
 
 
+def _safe_int(val, default: int = 1, min_val: int = None, max_val: int = None) -> int:
+    """
+    Safely converts a value (which may be NaN, float 0.0, None, string, etc.)
+    to an integer with optional bounding.
+    """
+    try:
+        if pd.isna(val) or val is None or str(val).strip().lower() in ["", "nan", "none", "null"]:
+            res = default
+        else:
+            res = int(float(val))
+    except Exception:
+        res = default
+    if min_val is not None and res < min_val:
+        res = min_val
+    if max_val is not None and res > max_val:
+        res = max_val
+    return res
+
+
+def _safe_float(val, default: float = 0.0, min_val: float = None, max_val: float = None) -> float:
+    """
+    Safely converts a value (which may be NaN, None, string, etc.)
+    to a float with optional bounding.
+    """
+    try:
+        if pd.isna(val) or val is None or str(val).strip().lower() in ["", "nan", "none", "null"]:
+            res = default
+        else:
+            res = float(val)
+            if pd.isna(res):
+                res = default
+    except Exception:
+        res = default
+    if min_val is not None and res < min_val:
+        res = min_val
+    if max_val is not None and res > max_val:
+        res = max_val
+    return res
+
+
 def generate_driver_sheet_script(trip_name: str, drivers: list) -> str:
     """
     Generates a Google Apps Script that creates a formatted Google Sheet
@@ -700,12 +740,12 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
             # --- TOP ROW: OPERATIONS METRICS DASHBOARD ---
             total_signups = len(signups_df)
-            target_attendees = max(1, int(selected_trip_row.get("Attendees", 1)))
-            target_vehicles = max(1, int(selected_trip_row.get("Vehicles", 1)))
-            total_cost = float(selected_trip_row.get("TotalCost", 0.0))
-            school_funding = float(selected_trip_row.get("SchoolFunding", 0.0)) if pd.notnull(selected_trip_row.get("SchoolFunding")) else 0.0
-            net_cost = float(selected_trip_row.get("NetCost", total_cost - school_funding)) if pd.notnull(selected_trip_row.get("NetCost")) else max(0.0, total_cost - school_funding)
-            approx_ticket_price = net_cost / target_attendees
+            target_attendees = _safe_int(selected_trip_row.get("Attendees"), default=1, min_val=0)
+            target_vehicles = _safe_int(selected_trip_row.get("Vehicles"), default=0, min_val=0)
+            total_cost = _safe_float(selected_trip_row.get("TotalCost"), default=0.0, min_val=0.0)
+            school_funding = _safe_float(selected_trip_row.get("SchoolFunding"), default=0.0, min_val=0.0)
+            net_cost = _safe_float(selected_trip_row.get("NetCost"), default=max(0.0, total_cost - school_funding), min_val=0.0)
+            approx_ticket_price = net_cost / max(1, target_attendees)
 
             paid_df = signups_df[signups_df["PaymentReceived"] == True] if not signups_df.empty else pd.DataFrame()
             paid_count = len(paid_df)
@@ -799,7 +839,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                             try:
                                 curr_ed = date.fromisoformat(str(selected_trip_row.get("EndDate", "")).strip())
                             except Exception:
-                                curr_ed = curr_sd + timedelta(days=int(selected_trip_row.get("Nights", 3)))
+                                curr_ed = curr_sd + timedelta(days=_safe_int(selected_trip_row.get("Nights"), default=3, min_val=0))
 
                             col_e_sd, col_e_ed = st.columns(2)
                             with col_e_sd:
@@ -812,31 +852,78 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         st.markdown("###### Attendance & Vehicles")
                         e_att1, e_att2, e_att3 = st.columns(3)
                         with e_att1:
-                            edit_att = st.number_input("Expected Attendees", min_value=1, max_value=150, value=int(selected_trip_row.get("Attendees", 24)), step=1)
+                            edit_att = st.number_input(
+                                "Expected Attendees",
+                                min_value=0,
+                                max_value=250,
+                                value=_safe_int(selected_trip_row.get("Attendees"), default=24, min_val=0, max_val=250),
+                                step=1
+                            )
                         with e_att2:
-                            edit_veh = st.number_input("Vehicles / Carpools", min_value=1, max_value=30, value=int(selected_trip_row.get("Vehicles", 6)), step=1)
+                            edit_veh = st.number_input(
+                                "Vehicles / Carpools",
+                                min_value=0,
+                                max_value=50,
+                                value=_safe_int(selected_trip_row.get("Vehicles"), default=6, min_val=0, max_val=50),
+                                step=1
+                            )
                         with e_att3:
-                            edit_miles = st.number_input("Round-Trip Distance from UCSB (Miles)", min_value=0, max_value=5000, value=int(float(selected_trip_row.get("RoundTripMiles", 0))), step=10)
+                            edit_miles = st.number_input(
+                                "Round-Trip Distance from UCSB (Miles)",
+                                min_value=0,
+                                max_value=10000,
+                                value=_safe_int(selected_trip_row.get("RoundTripMiles"), default=0, min_val=0, max_val=10000),
+                                step=10
+                            )
 
                         st.markdown("###### Pricing Breakdown & Outflows")
                         b1, b2, b3, b4 = st.columns(4)
                         with b1:
-                            edit_cabin = st.number_input("Cabin / Lodging Cost ($)", min_value=0.0, value=float(selected_trip_row.get("CabinCost", 0.0)), step=50.0)
+                            edit_cabin = st.number_input(
+                                "Cabin / Lodging Cost ($)",
+                                min_value=0.0,
+                                value=_safe_float(selected_trip_row.get("CabinCost"), default=0.0, min_val=0.0),
+                                step=50.0
+                            )
                         with b2:
-                            edit_food = st.number_input("Food & Drink Cost ($)", min_value=0.0, value=float(selected_trip_row.get("FoodAlcoholCost", 0.0)), step=50.0)
+                            edit_food = st.number_input(
+                                "Food & Drink Cost ($)",
+                                min_value=0.0,
+                                value=_safe_float(selected_trip_row.get("FoodAlcoholCost"), default=0.0, min_val=0.0),
+                                step=50.0
+                            )
                         with b3:
-                            edit_tickets = st.number_input("Lift Tickets Cost ($)", min_value=0.0, value=float(selected_trip_row.get("LiftTicketsCost", 0.0)), step=50.0)
+                            edit_tickets = st.number_input(
+                                "Lift Tickets Cost ($)",
+                                min_value=0.0,
+                                value=_safe_float(selected_trip_row.get("LiftTicketsCost"), default=0.0, min_val=0.0),
+                                step=50.0
+                            )
                         with b4:
-                            edit_gas = st.number_input("Estimated Gas Cost ($)", min_value=0.0, value=float(selected_trip_row.get("GasCost", 0.0)), step=25.0)
+                            edit_gas = st.number_input(
+                                "Estimated Gas Cost ($)",
+                                min_value=0.0,
+                                value=_safe_float(selected_trip_row.get("GasCost"), default=0.0, min_val=0.0),
+                                step=25.0
+                            )
 
                         st.markdown("###### School Funding & Subsidies")
                         sf1, sf2 = st.columns([1, 2])
                         with sf1:
-                            edit_funding = st.number_input("School Funding / Subsidy ($)", min_value=0.0, value=float(selected_trip_row.get("SchoolFunding", 0.0) or 0.0), step=50.0)
+                            edit_funding = st.number_input(
+                                "School Funding / Subsidy ($)",
+                                min_value=0.0,
+                                value=_safe_float(selected_trip_row.get("SchoolFunding"), default=0.0, min_val=0.0),
+                                step=50.0
+                            )
                         with sf2:
-                            edit_cov = st.text_input("School Coverage Details", value=str(selected_trip_row.get("SchoolCoverageDetails", "") or ""))
+                            cov_raw = selected_trip_row.get("SchoolCoverageDetails", "")
+                            cov_str = "" if pd.isna(cov_raw) or str(cov_raw).strip().lower() in ["nan", "none"] else str(cov_raw).strip()
+                            edit_cov = st.text_input("School Coverage Details", value=cov_str)
 
-                        edit_notes = st.text_input("Internal Trip Notes", value=str(selected_trip_row.get("Notes", "") or ""))
+                        notes_raw = selected_trip_row.get("Notes", "")
+                        notes_str = "" if pd.isna(notes_raw) or str(notes_raw).strip().lower() in ["nan", "none"] else str(notes_raw).strip()
+                        edit_notes = st.text_input("Internal Trip Notes", value=notes_str)
 
                         # Live pricing preview calculations
                         edit_gross = float(edit_cabin + edit_food + edit_tickets + edit_gas)
@@ -880,6 +967,15 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 st.rerun()
                             else:
                                 st.error(msg)
+
+                    st.write("")
+                    with st.popover("Delete This Trip"):
+                        st.warning(f"Are you sure you want to permanently delete **{selected_trip_row['Name']}**?")
+                        st.caption("This will remove the trip and all associated sign-ups and ledger records.")
+                        if st.button("Yes, Delete This Trip", key=f"del_trip_edit_exp_{selected_trip_id}", type="primary"):
+                            if delete_trip(selected_trip_id, is_officer=is_officer):
+                                st.success(f"Trip '{selected_trip_row['Name']}' deleted.")
+                                st.rerun()
 
             # --- GOOGLE FORMS LIVE SYNC SECTION FOR THIS TRIP ---
             with st.expander(f"Google Forms Live Sync & CSV Import for {selected_trip_row['Name']}", expanded=False):
@@ -1292,18 +1388,19 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             with c_card1:
                 st.markdown(f"#### {selected_trip_row['Name']} &bull; Details & Budget")
                 st.markdown(
-                    f"**Destination:** {selected_trip_row['Destination']} &bull; "
+                    f"**Destination:** {selected_trip_row.get('Destination', '')} &bull; "
                     f"**Type:** `{selected_trip_row.get('TripType', 'Recreational')}` &bull; "
-                    f"**Dates:** {selected_trip_row['StartDate']} to {selected_trip_row.get('EndDate', '')} ({selected_trip_row['Nights']} nights)"
+                    f"**Dates:** {selected_trip_row.get('StartDate', '')} to {selected_trip_row.get('EndDate', '')} ({_safe_int(selected_trip_row.get('Nights'), default=0, min_val=0)} nights)"
                 )
-                cabin_c = float(selected_trip_row.get('CabinCost', 0))
-                food_c = float(selected_trip_row.get('FoodAlcoholCost', 0))
-                gas_c = float(selected_trip_row.get('GasCost', 0))
-                tickets_c = float(selected_trip_row.get('LiftTicketsCost', 0))
-                total_c = float(selected_trip_row.get('TotalCost', 0))
-                funding_c = float(selected_trip_row.get('SchoolFunding', 0)) if pd.notnull(selected_trip_row.get('SchoolFunding')) else 0.0
-                net_c = float(selected_trip_row.get('NetCost', total_c - funding_c)) if pd.notnull(selected_trip_row.get('NetCost')) else max(0.0, total_c - funding_c)
-                cov_det = str(selected_trip_row.get('SchoolCoverageDetails', '')).strip()
+                cabin_c = _safe_float(selected_trip_row.get('CabinCost'), default=0.0, min_val=0.0)
+                food_c = _safe_float(selected_trip_row.get('FoodAlcoholCost'), default=0.0, min_val=0.0)
+                gas_c = _safe_float(selected_trip_row.get('GasCost'), default=0.0, min_val=0.0)
+                tickets_c = _safe_float(selected_trip_row.get('LiftTicketsCost'), default=0.0, min_val=0.0)
+                total_c = _safe_float(selected_trip_row.get('TotalCost'), default=0.0, min_val=0.0)
+                funding_c = _safe_float(selected_trip_row.get('SchoolFunding'), default=0.0, min_val=0.0)
+                net_c = _safe_float(selected_trip_row.get('NetCost'), default=max(0.0, total_c - funding_c), min_val=0.0)
+                cov_raw = selected_trip_row.get('SchoolCoverageDetails', '')
+                cov_det = "" if pd.isna(cov_raw) or str(cov_raw).strip().lower() in ['nan', 'none'] else str(cov_raw).strip()
 
                 budget_parts = [
                     f"Cabin \\${cabin_c:,.0f}",
