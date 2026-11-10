@@ -62,7 +62,9 @@ The UCSB Ski & Snowboard Team Dashboard is a production-ready web application bu
   - **Google Sheets Live Sync & CSV Merch Backup**: Dedicated expander enabling officers to synchronize independent merch adjustments directly with the team Google Sheet (`TRIPS_EVENTS_SHEET_URL`, under the `Merch` worksheet), download the master merch adjustments CSV, or import/restore CSV backups.
   - **Cold-Boot Cloud Persistence**: Automatically populates local cache from the Google Sheet `Merch` worksheet on Streamlit Community Cloud container restarts, ensuring zero data loss across reboots.
 - **Trip Creator & Operations** ([[modules/trip_creator.py](file:///c:/Users/bosqu/OneDrive/Documents/Ski%20Team%20Dash/modules/trip_creator.py)]):
-  - Trip creation workflow supporting Recreational and Competition trips.
+  - Trip creation workflow supporting Recreational and Competition trips (staff members are no longer automatically enrolled).
+  - Comprehensive Trip Editing: Interactive editing in Tab 1 for trip name, destination, type, status, dates, attendance, vehicles, and full budget breakdown.
+  - Form Generator State Stability: Stable session keys prevent sign-up data from disappearing when editing driver details or logistics.
   - Automated Competition Trip Roster: Creating a `Competition` trip automatically identifies all active members on the Competition Team (`CompTeam == True`), adds them to the trip's `AttendeeRoster`, registers them in `trip_signups.csv`, synchronizes their `TripsAttended` history in `members.csv` for the matching season, and automatically adjusts trip expected attendees to accommodate all competitors.
   - Full Bidirectional Roster Sync: Adding attendees (`add_trip_attendee`), syncing form sheets (`parse_and_sync_trip_form_df`), deleting attendees (`delete_multiple_trip_attendees`), or deleting entire trips (`delete_trip`) maintains 100% real-time synchronization between `trips.csv` (`AttendeeRoster`), `trip_signups.csv`, and `members.csv` (`TripsAttended`).
   - Automated budget estimation based on resort distance, gas pricing, lodging, and lift tickets.

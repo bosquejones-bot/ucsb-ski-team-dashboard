@@ -236,7 +236,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                     tshirt_size = st.selectbox("Complementary T-Shirt Size", SHIRT_SIZES, index=0)
 
                 with c3:
-                    is_staff = st.checkbox("Staff Member (Dues Exempt & Added to Trips)", value=False)
+                    is_staff = st.checkbox("Staff Member (Dues Exempt)", value=False)
                     dues_paid = st.checkbox("Dues Paid ($60)", value=True, disabled=is_staff, help="Staff members are exempt from dues")
                     slack_joined = st.checkbox("Joined Slack", value=False)
                     comp_team = st.checkbox("Competition Team (USCSA Racer)", value=False)
@@ -390,7 +390,7 @@ def render_registration_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             column_config={
                 "Staff": st.column_config.CheckboxColumn(
                     "Staff",
-                    help="Click to designate staff member (exempt from dues & auto-added to trips)",
+                    help="Click to designate staff member (exempt from dues)",
                     default=False
                 ),
                 "Dues Paid": st.column_config.CheckboxColumn(

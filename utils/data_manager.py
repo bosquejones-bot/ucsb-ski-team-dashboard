@@ -2411,20 +2411,9 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
         df = load_trips(season=None, is_officer=is_officer)
         next_id = f"TRIP-{len(df) + 1:03d}"
 
-        # When creating any trip, automatically add all active Staff members
+        # Actual season
         actual_season = season if season and season != "All Seasons" else CURRENT_SEASON
         members_season_df = load_members(season=actual_season, is_officer=is_officer)
-        staff_df = members_season_df[members_season_df["Staff"] == True] if "Staff" in members_season_df.columns else pd.DataFrame()
-        if staff_df.empty:
-            all_m = load_members(season=None, is_officer=is_officer)
-            staff_df = all_m[all_m["Staff"] == True] if "Staff" in all_m.columns else pd.DataFrame()
-
-        staff_members_to_signup = []
-        if not staff_df.empty:
-            staff_names = [str(n).strip() for n in staff_df["Name"].dropna().tolist() if str(n).strip()]
-            combined_roster = list(dict.fromkeys((attendee_roster or []) + staff_names))
-            attendee_roster = combined_roster
-            staff_members_to_signup = staff_df.to_dict("records")
 
         # When creating a competition trip, automatically add all members on the comp team
         comp_members_to_signup = []
@@ -2477,10 +2466,10 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
         df = pd.concat([df, new_trip], ignore_index=True)
         save_trips(df, is_officer=is_officer)
 
-        # Add staff and comp members to trip_signups.csv
+        # Add comp members to trip_signups.csv (for competition trips)
         auto_members_to_signup = []
         seen_auto_names = set()
-        for r_rec in (staff_members_to_signup + comp_members_to_signup):
+        for r_rec in comp_members_to_signup:
             r_name = str(r_rec.get("Name", "")).strip().title()
             if r_name and r_name.lower() not in seen_auto_names:
                 seen_auto_names.add(r_name.lower())
@@ -2508,8 +2497,7 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                 # Avoid duplicate signup for this trip
                 is_signed_up = not all_signups[(all_signups["TripID"] == next_id) & (all_signups["Name"].str.lower() == c_name.lower())].empty
                 if not is_signed_up:
-                    is_staff_mem = _is_truthy(c_rec.get("Staff", False))
-                    q_note = "Staff member automatic registration" if is_staff_mem else "Competition Team member automatic registration"
+                    q_note = "Competition Team member automatic registration"
                     s_id = f"SIGNUP-{max_sid + len(signup_rows) + 1:03d}"
                     signup_rows.append({
                         "SignupID": s_id,
@@ -2644,6 +2632,121 @@ def update_trip_status(trip_id: str, new_status: str, is_officer: bool = False) 
     except Exception as e:
         print(f"Error updating trip status: {e}")
         return False
+
+
+def update_trip_details(
+    trip_id: str,
+    name: str = None,
+    destination: str = None,
+    trip_type: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    nights: int = None,
+    miles: float = None,
+    attendees: int = None,
+    vehicles: int = None,
+    cabin: float = None,
+    food: float = None,
+    tickets: float = None,
+    gas: float = None,
+    total_cost: float = None,
+    school_funding: float = None,
+    net_cost: float = None,
+    school_coverage_details: str = None,
+    status: str = None,
+    notes: str = None,
+    is_officer: bool = False
+) -> tuple[bool, str]:
+    """
+    Update details and budget breakdown for an existing trip.
+    Synchronizes trip name across signups and ledger entries if changed.
+    Persists updates directly to CSV and Google Sheets.
+    """
+    try:
+        if not trip_id:
+            return False, "Invalid Trip ID."
+        df = load_trips(season=None, is_officer=is_officer)
+        if df.empty:
+            return False, "Trips dataset is empty."
+        mask = df["TripID"] == trip_id
+        if not mask.any():
+            return False, f"Trip '{trip_id}' not found."
+
+        old_row = df.loc[mask].iloc[0]
+        old_name = str(old_row.get("Name", "")).strip()
+
+        if name is not None and str(name).strip():
+            df.loc[mask, "Name"] = str(name).strip()
+        if destination is not None and str(destination).strip():
+            df.loc[mask, "Destination"] = str(destination).strip()
+        if trip_type is not None and str(trip_type).strip():
+            df.loc[mask, "TripType"] = str(trip_type).strip()
+        if start_date is not None and str(start_date).strip():
+            df.loc[mask, "StartDate"] = str(start_date).strip()
+        if end_date is not None and str(end_date).strip():
+            df.loc[mask, "EndDate"] = str(end_date).strip()
+        if nights is not None:
+            df.loc[mask, "Nights"] = max(0, int(nights))
+        if miles is not None:
+            df.loc[mask, "RoundTripMiles"] = max(0.0, float(miles))
+        if attendees is not None:
+            df.loc[mask, "Attendees"] = max(1, int(attendees))
+        if vehicles is not None:
+            df.loc[mask, "Vehicles"] = max(1, int(vehicles))
+        if cabin is not None:
+            df.loc[mask, "CabinCost"] = max(0.0, float(cabin))
+        if food is not None:
+            df.loc[mask, "FoodAlcoholCost"] = max(0.0, float(food))
+        if tickets is not None:
+            df.loc[mask, "LiftTicketsCost"] = max(0.0, float(tickets))
+        if gas is not None:
+            df.loc[mask, "GasCost"] = max(0.0, float(gas))
+        if school_funding is not None:
+            df.loc[mask, "SchoolFunding"] = max(0.0, float(school_funding))
+        if school_coverage_details is not None:
+            df.loc[mask, "SchoolCoverageDetails"] = str(school_coverage_details).strip()
+        if status is not None and str(status).strip():
+            df.loc[mask, "Status"] = str(status).strip()
+        if notes is not None:
+            df.loc[mask, "Notes"] = str(notes).strip()
+
+        # Recalculate total_cost and net_cost
+        c_cabin = float(df.loc[mask, "CabinCost"].iloc[0]) if "CabinCost" in df.columns and pd.notnull(df.loc[mask, "CabinCost"].iloc[0]) else 0.0
+        c_food = float(df.loc[mask, "FoodAlcoholCost"].iloc[0]) if "FoodAlcoholCost" in df.columns and pd.notnull(df.loc[mask, "FoodAlcoholCost"].iloc[0]) else 0.0
+        c_tickets = float(df.loc[mask, "LiftTicketsCost"].iloc[0]) if "LiftTicketsCost" in df.columns and pd.notnull(df.loc[mask, "LiftTicketsCost"].iloc[0]) else 0.0
+        c_gas = float(df.loc[mask, "GasCost"].iloc[0]) if "GasCost" in df.columns and pd.notnull(df.loc[mask, "GasCost"].iloc[0]) else 0.0
+        calc_total = c_cabin + c_food + c_tickets + c_gas
+        final_total = float(total_cost) if total_cost is not None else calc_total
+        df.loc[mask, "TotalCost"] = final_total
+
+        s_funding = float(df.loc[mask, "SchoolFunding"].iloc[0]) if "SchoolFunding" in df.columns and pd.notnull(df.loc[mask, "SchoolFunding"].iloc[0]) else 0.0
+        final_net = float(net_cost) if net_cost is not None else max(0.0, final_total - s_funding)
+        df.loc[mask, "NetCost"] = final_net
+
+        save_trips(df, is_officer=is_officer)
+
+        # If trip name changed, update TripName in trip signups and ledger
+        new_name = str(df.loc[mask, "Name"].iloc[0]).strip()
+        if old_name and new_name and old_name != new_name:
+            try:
+                signups_df = load_trip_signups(season=None, is_officer=is_officer)
+                s_mask = (signups_df["TripID"] == trip_id) | (signups_df["TripName"] == old_name)
+                if s_mask.any():
+                    signups_df.loc[s_mask, "TripName"] = new_name
+                    save_trip_signups(signups_df, is_officer=is_officer)
+            except Exception as e_s:
+                print(f"Error updating trip name in signups: {e_s}")
+
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        return True, f"Trip '{new_name}' updated successfully."
+    except Exception as e:
+        print(f"Error updating trip details: {e}")
+        return False, f"Failed to update trip details: {e}"
 
 
 def generate_trips_ical(trips_df: pd.DataFrame, calendar_name: str = "UCSB Ski Team Trips") -> str:
@@ -3522,7 +3625,10 @@ def load_todos(season: str = None, status: str = None, is_officer: bool = False)
                 df = pd.DataFrame(columns=TODO_COLS)
 
     try:
-        if "Season" not in df.columns:
+        for col in TODO_COLS:
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str).replace({"0.0": "", "nan": "", "None": "", "NaN": ""})
+        if "Season" not in df.columns or not df["Season"].astype(str).str.strip().any():
             df["Season"] = "2026-2027"
         if season and season != "All Seasons":
             df = df[df["Season"] == season]
@@ -3584,12 +3690,20 @@ def set_todo_status(task_id: str, new_status: str, is_officer: bool = False) -> 
         df = load_todos(season=None, is_officer=is_officer)
         idx = df[df["TaskID"] == task_id].index
         if len(idx) > 0:
-            df.loc[idx[0], "Status"] = new_status
+            for col in TODO_COLS:
+                if col in df.columns:
+                    df[col] = df[col].fillna("").astype(str).replace({"0.0": "", "nan": "", "None": "", "NaN": ""})
+            df.loc[idx[0], "Status"] = str(new_status)
             if new_status == "Completed":
                 df.loc[idx[0], "CompletedDate"] = date.today().strftime("%Y-%m-%d")
             else:
                 df.loc[idx[0], "CompletedDate"] = ""
             save_todos(df, is_officer=is_officer)
+            try:
+                import streamlit as st
+                st.cache_data.clear()
+            except Exception:
+                pass
             return True
         return False
     except Exception as e:
@@ -3605,6 +3719,11 @@ def delete_todo(task_id: str, is_officer: bool = False) -> bool:
         if len(match_idx) > 0:
             df = df.drop(match_idx).reset_index(drop=True)
             save_todos(df, is_officer=is_officer)
+            try:
+                import streamlit as st
+                st.cache_data.clear()
+            except Exception:
+                pass
             return True
         return False
     except Exception as e:

@@ -16,7 +16,7 @@ from utils.data_manager import (
     fetch_and_sync_trip_form_sheet, parse_and_sync_trip_form_df,
     add_trip_attendee, delete_trip_attendee, delete_multiple_trip_attendees,
     record_trip_payment_in_ledger, remove_trip_payment_from_ledger,
-    update_trip_status, generate_trips_ical, _is_truthy
+    update_trip_status, update_trip_details, generate_trips_ical, _is_truthy
 )
 from config import (
     DESTINATIONS, TRIP_TYPES, TRIP_STATUS_OPTIONS, DEFAULT_MPG, DEFAULT_GAS_PRICE,
@@ -236,13 +236,6 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 autofill_miles = dest_meta["round_trip_miles"]
 
             target_s = selected_season if selected_season != "All Seasons" else CURRENT_SEASON
-            staff_m = load_members(season=target_s, is_officer=is_officer)
-            staff_m = staff_m[staff_m["Staff"] == True] if "Staff" in staff_m.columns else pd.DataFrame()
-            if staff_m.empty:
-                all_m = load_members(season=None, is_officer=is_officer)
-                staff_m = all_m[all_m["Staff"] == True] if "Staff" in all_m.columns else pd.DataFrame()
-            if not staff_m.empty:
-                st.info(f"**Staff Auto-Enroll**: All **{len(staff_m)}** active Staff member(s) will be automatically added to this trip roster.")
 
             trip_type = st.radio("Trip Type", TRIP_TYPES, horizontal=True, key="ct_type")
             if trip_type == "Competition":
@@ -401,21 +394,36 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         f"Zelle ucsbskiteam (preferred method) or Venmo @ucsbskiteam."
     )
 
+    if "ct_form_title" not in st.session_state:
+        st.session_state["ct_form_title"] = default_title
+    if "ct_form_price" not in st.session_state:
+        st.session_state["ct_form_price"] = float(round(calculated_ticket_price, 0))
+    if "ct_form_desc" not in st.session_state:
+        st.session_state["ct_form_desc"] = default_desc
+
     # --- STEP 2: BUILT-IN GOOGLE FORM SIGN-UP GENERATOR ---
     with st.expander("2. Built-in Google Form Sign-Up Generator (Editable Details)", expanded=not show_script):
         st.markdown("Review and edit all details that will appear on the Google Form sign-up sheet for this trip.")
 
-        c_f1, c_f2 = st.columns([2, 1])
+        c_f1, c_f2, c_sync = st.columns([2, 1, 1.2])
         with c_f1:
-            form_title_input = st.text_input("Google Form Title (Editable)", value=default_title, key=f"form_title_{final_destination}")
+            form_title_input = st.text_input("Google Form Title (Editable)", value=st.session_state["ct_form_title"], key="ct_form_title")
         with c_f2:
-            form_price_input = st.number_input("Form Display Price per Skier ($)", min_value=0.0, value=float(round(calculated_ticket_price, 0)), step=5.0, key=f"form_price_{calculated_ticket_price}")
+            form_price_input = st.number_input("Form Display Price per Skier ($)", min_value=0.0, value=float(st.session_state["ct_form_price"]), step=5.0, key="ct_form_price")
+        with c_sync:
+            st.write("")
+            st.write("")
+            if st.button("Sync with Trip Logistics", help="Update form title, price, and description from the latest budget & dates above", key="btn_sync_form_details"):
+                st.session_state["ct_form_title"] = default_title
+                st.session_state["ct_form_price"] = float(round(calculated_ticket_price, 0))
+                st.session_state["ct_form_desc"] = default_desc
+                st.rerun()
 
         form_desc_input = st.text_area(
             "Form Header Description & Instructions (Editable)",
-            value=default_desc,
+            value=st.session_state["ct_form_desc"],
             height=160,
-            key=f"form_desc_{final_destination}_{start_date}_{nights}_{calculated_ticket_price}"
+            key="ct_form_desc"
         )
 
         st.markdown("##### Default Response Fields (Customizable Sign-Up Fields)")
@@ -431,6 +439,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         if "trip_form_fields" not in st.session_state or not isinstance(st.session_state["trip_form_fields"], list):
             st.session_state["trip_form_fields"] = [dict(f) for f in default_form_fields]
 
+        form_fields_ver = st.session_state.get("form_fields_ver", 0)
         df_form_fields = pd.DataFrame(st.session_state["trip_form_fields"])
 
         edited_fields_df = st.data_editor(
@@ -438,7 +447,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
             num_rows="dynamic",
             width="stretch",
             hide_index=True,
-            key="editor_trip_form_fields",
+            key=f"editor_trip_form_fields_{form_fields_ver}",
             column_config={
                 "Field": st.column_config.TextColumn("Field / Question Title", required=True),
                 "Format": st.column_config.SelectboxColumn(
@@ -452,8 +461,8 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
             }
         )
 
-        # Sync editor changes back to session state
-        if not edited_fields_df.empty:
+        # Sync editor changes back to session state safely
+        if not edited_fields_df.empty and not edited_fields_df.equals(df_form_fields):
             updated_records = edited_fields_df.dropna(subset=["Field"]).to_dict(orient="records")
             st.session_state["trip_form_fields"] = updated_records
 
@@ -482,6 +491,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                             "Required": new_f_req,
                             "Detail": new_f_detail.strip()
                         })
+                        st.session_state["form_fields_ver"] = form_fields_ver + 1
                         st.success(f"Added '{new_f_name.strip()}' to form fields.")
                         st.rerun()
                     else:
@@ -497,6 +507,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                         st.session_state["trip_form_fields"] = [
                             f for f in st.session_state["trip_form_fields"] if f.get("Field") != f_to_del
                         ]
+                        st.session_state["form_fields_ver"] = form_fields_ver + 1
                         st.success(f"Removed '{f_to_del}'.")
                         st.rerun()
                 else:
@@ -505,6 +516,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         with c_f_rst:
             if st.button("Reset Defaults", help="Reset to standard 4 response fields", width="stretch", key="btn_reset_fields"):
                 st.session_state["trip_form_fields"] = [dict(f) for f in default_form_fields]
+                st.session_state["form_fields_ver"] = form_fields_ver + 1
                 st.success("Form fields reset to default.")
                 st.rerun()
 
@@ -542,6 +554,11 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 st.session_state["just_created_trip_season"] = target_trip_season
                 st.session_state["just_created_trip_title"] = form_title_input
                 st.session_state["just_created_trip_desc"] = form_desc_input
+                # Clean up form cache for next creation
+                st.session_state.pop("ct_form_title", None)
+                st.session_state.pop("ct_form_price", None)
+                st.session_state.pop("ct_form_desc", None)
+                st.session_state.pop("trip_form_fields", None)
                 st.rerun()
             else:
                 st.error("Failed to save trip. Please try again.")
@@ -738,6 +755,131 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             )
 
             st.divider()
+
+            # --- EDIT TRIP DETAILS & PRICING BREAKDOWN ---
+            with st.expander(f"Edit Trip Details & Pricing Breakdown - {selected_trip_row['Name']}", expanded=False):
+                if not is_officer:
+                    st.info("Officer access required to edit trip details. Enter the officer password in the sidebar to unlock.")
+                elif not can_edit:
+                    st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to edit trip details.")
+                else:
+                    st.markdown(f"##### Edit Logistics & Budget for **{selected_trip_row['Name']}**")
+                    with st.form(f"form_edit_trip_{selected_trip_id}"):
+                        e_c1, e_c2 = st.columns(2)
+                        with e_c1:
+                            edit_name = st.text_input("Trip Name", value=str(selected_trip_row.get("Name", "")).strip())
+                            curr_dest = str(selected_trip_row.get("Destination", "Mammoth")).strip()
+                            dest_keys = list(DESTINATIONS.keys())
+                            dest_opts = dest_keys + ["Other"] if "Other" not in dest_keys else dest_keys
+                            dest_idx = dest_opts.index(curr_dest) if curr_dest in dest_opts else len(dest_opts) - 1
+                            edit_dest_choice = st.selectbox("Destination", dest_opts, index=dest_idx)
+                            if edit_dest_choice == "Other" and curr_dest not in dest_keys:
+                                edit_dest_custom = st.text_input("Custom Destination Name", value=curr_dest if curr_dest != "Other" else "")
+                                edit_final_dest = edit_dest_custom.strip() if edit_dest_custom.strip() else "Other"
+                            else:
+                                edit_final_dest = edit_dest_choice
+
+                            curr_type = str(selected_trip_row.get("TripType", "Recreational")).strip()
+                            type_idx = TRIP_TYPES.index(curr_type) if curr_type in TRIP_TYPES else 0
+                            edit_type = st.radio("Trip Type", TRIP_TYPES, index=type_idx, horizontal=True)
+
+                        with e_c2:
+                            curr_stat = str(selected_trip_row.get("Status", "Planning")).strip()
+                            stat_opts = list(TRIP_STATUS_OPTIONS)
+                            if curr_stat and curr_stat not in stat_opts:
+                                stat_opts.insert(0, curr_stat)
+                            stat_idx = stat_opts.index(curr_stat) if curr_stat in stat_opts else 0
+                            edit_status = st.selectbox("Trip Status", stat_opts, index=stat_idx)
+
+                            # Dates
+                            try:
+                                curr_sd = date.fromisoformat(str(selected_trip_row.get("StartDate", "")).strip())
+                            except Exception:
+                                curr_sd = date.today()
+                            try:
+                                curr_ed = date.fromisoformat(str(selected_trip_row.get("EndDate", "")).strip())
+                            except Exception:
+                                curr_ed = curr_sd + timedelta(days=int(selected_trip_row.get("Nights", 3)))
+
+                            col_e_sd, col_e_ed = st.columns(2)
+                            with col_e_sd:
+                                edit_start_date = st.date_input("Start Date", value=curr_sd)
+                            with col_e_ed:
+                                edit_end_date = st.date_input("End Date", value=max(edit_start_date, curr_ed), min_value=edit_start_date)
+                            edit_nights = max(0, (edit_end_date - edit_start_date).days)
+                            st.caption(f"Trip Duration: **{edit_nights} night(s)**")
+
+                        st.markdown("###### Attendance & Vehicles")
+                        e_att1, e_att2, e_att3 = st.columns(3)
+                        with e_att1:
+                            edit_att = st.number_input("Expected Attendees", min_value=1, max_value=150, value=int(selected_trip_row.get("Attendees", 24)), step=1)
+                        with e_att2:
+                            edit_veh = st.number_input("Vehicles / Carpools", min_value=1, max_value=30, value=int(selected_trip_row.get("Vehicles", 6)), step=1)
+                        with e_att3:
+                            edit_miles = st.number_input("Round-Trip Distance from UCSB (Miles)", min_value=0, max_value=5000, value=int(float(selected_trip_row.get("RoundTripMiles", 0))), step=10)
+
+                        st.markdown("###### Pricing Breakdown & Outflows")
+                        b1, b2, b3, b4 = st.columns(4)
+                        with b1:
+                            edit_cabin = st.number_input("Cabin / Lodging Cost ($)", min_value=0.0, value=float(selected_trip_row.get("CabinCost", 0.0)), step=50.0)
+                        with b2:
+                            edit_food = st.number_input("Food & Drink Cost ($)", min_value=0.0, value=float(selected_trip_row.get("FoodAlcoholCost", 0.0)), step=50.0)
+                        with b3:
+                            edit_tickets = st.number_input("Lift Tickets Cost ($)", min_value=0.0, value=float(selected_trip_row.get("LiftTicketsCost", 0.0)), step=50.0)
+                        with b4:
+                            edit_gas = st.number_input("Estimated Gas Cost ($)", min_value=0.0, value=float(selected_trip_row.get("GasCost", 0.0)), step=25.0)
+
+                        st.markdown("###### School Funding & Subsidies")
+                        sf1, sf2 = st.columns([1, 2])
+                        with sf1:
+                            edit_funding = st.number_input("School Funding / Subsidy ($)", min_value=0.0, value=float(selected_trip_row.get("SchoolFunding", 0.0) or 0.0), step=50.0)
+                        with sf2:
+                            edit_cov = st.text_input("School Coverage Details", value=str(selected_trip_row.get("SchoolCoverageDetails", "") or ""))
+
+                        edit_notes = st.text_input("Internal Trip Notes", value=str(selected_trip_row.get("Notes", "") or ""))
+
+                        # Live pricing preview calculations
+                        edit_gross = float(edit_cabin + edit_food + edit_tickets + edit_gas)
+                        edit_net = max(0.0, float(edit_gross - edit_funding))
+                        edit_per_skier = edit_net / max(1, edit_att)
+
+                        st.caption(
+                            f"Total Gross Outflow: **\\${edit_gross:,.2f}** &bull; "
+                            f"Net Team Cost: **\\${edit_net:,.2f}** &bull; "
+                            f"**Calculated Cost Per Skier: \\${edit_per_skier:,.2f}**"
+                        )
+
+                        submit_edit_trip = st.form_submit_button("Save Trip Details & Pricing Breakdown", type="primary", width="stretch")
+                        if submit_edit_trip:
+                            ok, msg = update_trip_details(
+                                trip_id=selected_trip_id,
+                                name=edit_name,
+                                destination=edit_final_dest,
+                                trip_type=edit_type,
+                                start_date=edit_start_date.strftime("%Y-%m-%d"),
+                                end_date=edit_end_date.strftime("%Y-%m-%d"),
+                                nights=edit_nights,
+                                miles=edit_miles,
+                                attendees=edit_att,
+                                vehicles=edit_veh,
+                                cabin=edit_cabin,
+                                food=edit_food,
+                                tickets=edit_tickets,
+                                gas=edit_gas,
+                                total_cost=edit_gross,
+                                school_funding=edit_funding,
+                                net_cost=edit_net,
+                                school_coverage_details=edit_cov,
+                                status=edit_status,
+                                notes=edit_notes,
+                                is_officer=is_officer
+                            )
+                            if ok:
+                                st.session_state["op_sel_trip"] = f"{edit_name.strip()} ({edit_final_dest})"
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
             # --- GOOGLE FORMS LIVE SYNC SECTION FOR THIS TRIP ---
             with st.expander(f"Google Forms Live Sync & CSV Import for {selected_trip_row['Name']}", expanded=False):
@@ -958,111 +1100,114 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         filtered_signups["Questions"].astype(str).str.lower().str.contains(q, na=False)
                     ]
 
-                st.caption(f"Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Toggle checkboxes or edit details freely, then click 'Save All Changes' below to persist.*")
+                if filtered_signups.empty:
+                    st.info("No attendees match the current filter criteria. Switch filters to 'All' or clear the search to view all attendees.")
+                else:
+                    st.caption(f"Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Toggle checkboxes or edit details freely, then click 'Save All Changes' below to persist.*")
 
-                # Prepare editable DataFrame with trip sign-up fields
-                display_cols = ["SignupID", "PaymentReceived", "Name", "Phone", "DrivingCapacity", "Questions", "SignupDate"]
-                editor_signups = filtered_signups[display_cols].copy()
-                editor_signups.columns = [
-                    "ID", "Payment Received", "Name", "Phone",
-                    "If you can drive (and how many passengers accounting for gear)",
-                    "Questions or Concerns?", "Sign-Up Date"
-                ]
+                    # Prepare editable DataFrame with trip sign-up fields
+                    display_cols = ["SignupID", "PaymentReceived", "Name", "Phone", "DrivingCapacity", "Questions", "SignupDate"]
+                    editor_signups = filtered_signups[display_cols].copy()
+                    editor_signups.columns = [
+                        "ID", "Payment Received", "Name", "Phone",
+                        "If you can drive (and how many passengers accounting for gear)",
+                        "Questions or Concerns?", "Sign-Up Date"
+                    ]
 
-                # Ensure strict compatible types for Streamlit data_editor column_configs
-                editor_signups["Payment Received"] = editor_signups["Payment Received"].apply(_is_truthy)
-                for txt_col in ["ID", "Name", "Phone", "Questions or Concerns?", "Sign-Up Date"]:
-                    editor_signups[txt_col] = (
-                        editor_signups[txt_col]
-                        .fillna("")
+                    # Ensure strict compatible types for Streamlit data_editor column_configs
+                    editor_signups["Payment Received"] = editor_signups["Payment Received"].apply(_is_truthy)
+                    for txt_col in ["ID", "Name", "Phone", "Questions or Concerns?", "Sign-Up Date"]:
+                        editor_signups[txt_col] = (
+                            editor_signups[txt_col]
+                            .fillna("")
+                            .astype(str)
+                            .replace({"nan": "", "None": "", "NaN": ""})
+                        )
+
+                    def _clean_driver_val(v):
+                        s = str(v).strip() if pd.notnull(v) else ""
+                        if s in DEFAULT_TRIP_DRIVER_OPTIONS:
+                            return s
+                        for opt in DEFAULT_TRIP_DRIVER_OPTIONS:
+                            if s and (s.lower() in opt.lower() or opt.lower() in s.lower()):
+                                return opt
+                        return DEFAULT_TRIP_DRIVER_OPTIONS[0]
+
+                    driver_col_name = "If you can drive (and how many passengers accounting for gear)"
+                    editor_signups[driver_col_name] = (
+                        editor_signups[driver_col_name]
+                        .apply(_clean_driver_val)
                         .astype(str)
-                        .replace({"nan": "", "None": "", "NaN": ""})
                     )
 
-                def _clean_driver_val(v):
-                    s = str(v).strip() if pd.notnull(v) else ""
-                    if s in DEFAULT_TRIP_DRIVER_OPTIONS:
-                        return s
-                    for opt in DEFAULT_TRIP_DRIVER_OPTIONS:
-                        if s and (s.lower() in opt.lower() or opt.lower() in s.lower()):
-                            return opt
-                    return DEFAULT_TRIP_DRIVER_OPTIONS[0]
+                    trip_editor_reset_key = f"reset_trip_signups_{selected_trip_id}"
+                    trip_editor_ver = st.session_state.get(trip_editor_reset_key, 0)
+                    edited_signups_result = st.data_editor(
+                        editor_signups,
+                        column_config={
+                            "Payment Received": st.column_config.CheckboxColumn(
+                                "Payment Received",
+                                help="Check when athlete sends payment via Venmo/Zelle",
+                                default=False
+                            ),
+                            "ID": st.column_config.TextColumn("ID", disabled=True),
+                            "Name": st.column_config.TextColumn("Name", disabled=True),
+                            "Phone": st.column_config.TextColumn("Phone"),
+                            "If you can drive (and how many passengers accounting for gear)": st.column_config.SelectboxColumn(
+                                "If you can drive (and how many passengers accounting for gear)",
+                                options=DEFAULT_TRIP_DRIVER_OPTIONS,
+                                required=True
+                            ),
+                            "Questions or Concerns?": st.column_config.TextColumn(
+                                "Questions or Concerns?",
+                                help="Dietary restrictions, carpool notes, or gear questions",
+                            ),
+                            "Sign-Up Date": st.column_config.TextColumn("Sign-Up Date", disabled=True)
+                        },
+                        disabled=["ID", "Name", "Sign-Up Date"] if (is_officer and can_edit) else True,
+                        hide_index=True,
+                        width="stretch",
+                        height=420,
+                        key=f"editor_trip_signups_{selected_trip_id}_{trip_editor_ver}"
+                    )
 
-                driver_col_name = "If you can drive (and how many passengers accounting for gear)"
-                editor_signups[driver_col_name] = (
-                    editor_signups[driver_col_name]
-                    .apply(_clean_driver_val)
-                    .astype(str)
-                )
+                    if is_officer and not can_edit:
+                        st.caption("Officer viewing mode active (read-only). Enable the Editing toggle in the sidebar to edit payments or driver capacities.")
+                    elif not is_officer:
+                        st.caption("Viewing trip roster in read-only mode. Enter the officer password in the sidebar to edit payments or driver capacities.")
 
-                trip_editor_reset_key = f"reset_trip_signups_{selected_trip_id}"
-                trip_editor_ver = st.session_state.get(trip_editor_reset_key, 0)
-                edited_signups_result = st.data_editor(
-                    editor_signups,
-                    column_config={
-                        "Payment Received": st.column_config.CheckboxColumn(
-                            "Payment Received",
-                            help="Check when athlete sends payment via Venmo/Zelle",
-                            default=False
-                        ),
-                        "ID": st.column_config.TextColumn("ID", disabled=True),
-                        "Name": st.column_config.TextColumn("Name", disabled=True),
-                        "Phone": st.column_config.TextColumn("Phone"),
-                        "If you can drive (and how many passengers accounting for gear)": st.column_config.SelectboxColumn(
-                            "If you can drive (and how many passengers accounting for gear)",
-                            options=DEFAULT_TRIP_DRIVER_OPTIONS,
-                            required=True
-                        ),
-                        "Questions or Concerns?": st.column_config.TextColumn(
-                            "Questions or Concerns?",
-                            help="Dietary restrictions, carpool notes, or gear questions",
-                        ),
-                        "Sign-Up Date": st.column_config.TextColumn("Sign-Up Date", disabled=True)
-                    },
-                    disabled=["ID", "Name", "Sign-Up Date"] if (is_officer and can_edit) else True,
-                    hide_index=True,
-                    width="stretch",
-                    height=420,
-                    key=f"editor_trip_signups_{selected_trip_id}_{trip_editor_ver}"
-                )
+                    # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
+                    if is_officer and can_edit:
+                        has_signup_changes = not edited_signups_result.equals(editor_signups)
+                        if has_signup_changes:
+                            num_signup_changed = int((edited_signups_result.fillna("") != editor_signups.fillna("")).any(axis=1).sum())
+                            row_lbl = "attendee" if num_signup_changed == 1 else "attendees"
+                            st.warning(f"You have unsaved changes ({num_signup_changed} {row_lbl} modified). Click Save All Changes to commit to Google Sheets and local database.")
 
-                if is_officer and not can_edit:
-                    st.caption("Officer viewing mode active (read-only). Enable the Editing toggle in the sidebar to edit payments or driver capacities.")
-                elif not is_officer:
-                    st.caption("Viewing trip roster in read-only mode. Enter the officer password in the sidebar to edit payments or driver capacities.")
-
-                # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
-                if is_officer and can_edit:
-                    has_signup_changes = not edited_signups_result.equals(editor_signups)
-                    if has_signup_changes:
-                        num_signup_changed = int((edited_signups_result.fillna("") != editor_signups.fillna("")).any(axis=1).sum())
-                        row_lbl = "attendee" if num_signup_changed == 1 else "attendees"
-                        st.warning(f"You have unsaved changes ({num_signup_changed} {row_lbl} modified). Click Save All Changes to commit to Google Sheets and local database.")
-
-                        c_save_s, c_disc_s, _ = st.columns([1.8, 1.2, 4.0])
-                        with c_save_s:
-                            if st.button(
-                                f"Save All Changes ({num_signup_changed})",
-                                type="primary",
-                                key=f"btn_save_signups_{selected_trip_id}",
-                                width="stretch"
-                            ):
-                                with st.spinner("Saving attendee updates and payments to Google Sheets..."):
-                                    if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
-                                        st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
-                                        st.success("Attendee updates and payment status saved directly to database.")
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to save changes to Google Sheets. Please try again.")
-                        with c_disc_s:
-                            if st.button(
-                                "Discard",
-                                key=f"btn_discard_signups_{selected_trip_id}",
-                                width="stretch",
-                                help="Discard unsaved edits and reload original data"
-                            ):
-                                st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
-                                st.rerun()
+                            c_save_s, c_disc_s, _ = st.columns([1.8, 1.2, 4.0])
+                            with c_save_s:
+                                if st.button(
+                                    f"Save All Changes ({num_signup_changed})",
+                                    type="primary",
+                                    key=f"btn_save_signups_{selected_trip_id}",
+                                    width="stretch"
+                                ):
+                                    with st.spinner("Saving attendee updates and payments to Google Sheets..."):
+                                        if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
+                                            st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                            st.success("Attendee updates and payment status saved directly to database.")
+                                            st.rerun()
+                                        else:
+                                            st.error("Failed to save changes to Google Sheets. Please try again.")
+                            with c_disc_s:
+                                if st.button(
+                                    "Discard",
+                                    key=f"btn_discard_signups_{selected_trip_id}",
+                                    width="stretch",
+                                    help="Discard unsaved edits and reload original data"
+                                ):
+                                    st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                    st.rerun()
 
                 # Action Bar: CSV Export, Driver Sheet Script Popover & Multi-Attendee Removal
                 c_exp, c_drv, c_rem = st.columns([2.0, 1.8, 1.2])
