@@ -12,7 +12,7 @@ import re
 from datetime import date, timedelta
 from utils.data_manager import (
     load_trips, load_members, add_created_trip, delete_trip,
-    load_trip_signups, save_edited_trip_signups,
+    load_trip_signups, save_edited_trip_signups, update_trip_attendee,
     fetch_and_sync_trip_form_sheet, parse_and_sync_trip_form_df,
     add_trip_attendee, delete_trip_attendee, delete_multiple_trip_attendees,
     record_trip_payment_in_ledger, remove_trip_payment_from_ledger,
@@ -734,8 +734,8 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             selected_trip_id = trip_choice_map[selected_trip_label]
             selected_trip_row = trips_df[trips_df["TripID"] == selected_trip_id].iloc[0]
 
-            # Signups data for this trip
-            signups_df = load_trip_signups(trip_id_or_name=selected_trip_id, is_officer=is_officer)
+            # Signups data for this trip (load all signups for this trip regardless of season filter)
+            signups_df = load_trip_signups(trip_id_or_name=selected_trip_id, season=None, is_officer=is_officer)
 
             # --- TOP ROW: OPERATIONS METRICS DASHBOARD ---
             total_signups = len(signups_df)
@@ -1166,13 +1166,13 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             if total_signups == 0:
                 st.info(f"No attendees registered yet for '{selected_trip_row['Name']}'. Use Google Forms sync above or 'Add Attendee Manually' to begin building the roster.")
             else:
-                f_search, f_pay, f_driver = st.columns([2.2, 1.2, 1.2])
+                f_search, f_pay, f_driver = st.columns([2.0, 1.3, 1.3])
                 with f_search:
                     search_q = st.text_input("Search Trip Attendees", placeholder="Search by name, phone, driving notes, or questions...", key=f"sq_{selected_trip_id}")
                 with f_pay:
-                    pay_filter = st.selectbox("Payment Status", ["All", "Paid Only", "Unpaid Only"], key=f"pf_{selected_trip_id}")
+                    pay_filter = st.selectbox("Filter Roster by Payment", ["All Attendees", "Paid Only", "Unpaid Only"], key=f"pf_{selected_trip_id}")
                 with f_driver:
-                    driver_filter = st.selectbox("Driver Status", ["All", "Drivers Only", "Non-Drivers Only"], key=f"df_{selected_trip_id}")
+                    driver_filter = st.selectbox("Filter Roster by Driver Status", ["All Attendees", "Drivers Only", "Non-Drivers Only"], key=f"df_{selected_trip_id}")
 
                 filtered_signups = signups_df.copy()
 
@@ -1195,17 +1195,36 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         filtered_signups["Questions"].astype(str).str.lower().str.contains(q, na=False)
                     ]
 
+                has_active_filters = (pay_filter != "All Attendees") or (driver_filter != "All Attendees") or bool(search_q.strip())
+
                 if filtered_signups.empty:
-                    st.info("No attendees match the current filter criteria. Switch filters to 'All' or clear the search to view all attendees.")
+                    st.warning(f"No attendees match the active filter criteria (Payment: '{pay_filter}', Driver: '{driver_filter}', Search: '{search_q}').")
+                    st.info(f"All {total_signups} attendee records for '{selected_trip_row['Name']}' remain safe in Google Sheets and database.")
+                    if st.button("Reset Filters (Show All Attendees)", key=f"reset_filters_{selected_trip_id}", type="primary"):
+                        st.session_state[f"sq_{selected_trip_id}"] = ""
+                        st.session_state[f"pf_{selected_trip_id}"] = "All Attendees"
+                        st.session_state[f"df_{selected_trip_id}"] = "All Attendees"
+                        st.rerun()
                 else:
-                    st.caption(f"Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Toggle checkboxes or edit details freely, then click 'Save All Changes' below to persist.*")
+                    if has_active_filters:
+                        c_show_info, c_reset_btn = st.columns([4, 1.2])
+                        with c_show_info:
+                            st.caption(f"Filtered view: Showing **{len(filtered_signups)}** of **{total_signups}** attendees &bull; *Edit directly in table below or use 'Quick Edit Attendee' button.*")
+                        with c_reset_btn:
+                            if st.button("Show All Attendees", key=f"btn_reset_active_f_{selected_trip_id}", help="Clear filters and show all attendees"):
+                                st.session_state[f"sq_{selected_trip_id}"] = ""
+                                st.session_state[f"pf_{selected_trip_id}"] = "All Attendees"
+                                st.session_state[f"df_{selected_trip_id}"] = "All Attendees"
+                                st.rerun()
+                    else:
+                        st.caption(f"Showing **{total_signups}** attendees &bull; *Toggle checkboxes or edit details freely, then click 'Save All Changes' below to persist.*")
 
                     # Prepare editable DataFrame with trip sign-up fields
                     display_cols = ["SignupID", "PaymentReceived", "Name", "Phone", "DrivingCapacity", "Questions", "SignupDate"]
                     editor_signups = filtered_signups[display_cols].copy()
                     editor_signups.columns = [
                         "ID", "Payment Received", "Name", "Phone",
-                        "If you can drive (and how many passengers accounting for gear)",
+                        "Driver Capacity & Availability",
                         "Questions or Concerns?", "Sign-Up Date"
                     ]
 
@@ -1228,7 +1247,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 return opt
                         return DEFAULT_TRIP_DRIVER_OPTIONS[0]
 
-                    driver_col_name = "If you can drive (and how many passengers accounting for gear)"
+                    driver_col_name = "Driver Capacity & Availability"
                     editor_signups[driver_col_name] = (
                         editor_signups[driver_col_name]
                         .apply(_clean_driver_val)
@@ -1248,8 +1267,9 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                             "ID": st.column_config.TextColumn("ID", disabled=True),
                             "Name": st.column_config.TextColumn("Name", disabled=True),
                             "Phone": st.column_config.TextColumn("Phone"),
-                            "If you can drive (and how many passengers accounting for gear)": st.column_config.SelectboxColumn(
-                                "If you can drive (and how many passengers accounting for gear)",
+                            "Driver Capacity & Availability": st.column_config.SelectboxColumn(
+                                "Driver Capacity & Availability",
+                                help="Select driver availability and passenger seats accounting for gear",
                                 options=DEFAULT_TRIP_DRIVER_OPTIONS,
                                 required=True
                             ),
@@ -1304,8 +1324,75 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                     st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
                                     st.rerun()
 
-                # Action Bar: CSV Export, Driver Sheet Script Popover & Multi-Attendee Removal
-                c_exp, c_drv, c_rem = st.columns([2.0, 1.8, 1.2])
+                # Action Bar: Quick Edit Attendee, CSV Export, Driver Sheet Script Popover & Multi-Attendee Removal
+                c_qe, c_exp, c_drv, c_rem = st.columns([1.8, 1.8, 1.6, 1.2])
+                with c_qe:
+                    with st.popover("Quick Edit Attendee"):
+                        if not is_officer:
+                            st.info("Officer access required to edit attendees. Enter the officer password in the sidebar to unlock.")
+                        elif not can_edit:
+                            st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to edit attendees.")
+                        else:
+                            st.markdown(f"**Edit Attendee Driver & Payment ({selected_trip_row['Name']})**")
+                            att_choices = {f"{r['Name']} ({r.get('SignupID', 'No ID')})": r for _, r in signups_df.iterrows()}
+                            if not att_choices:
+                                st.info("No attendees found to edit.")
+                            else:
+                                qe_sel_label = st.selectbox(
+                                    "Select Attendee to Edit",
+                                    options=list(att_choices.keys()),
+                                    key=f"qe_sel_{selected_trip_id}"
+                                )
+                                qe_row = att_choices[qe_sel_label]
+                                curr_d_val = str(qe_row.get("DrivingCapacity", DEFAULT_TRIP_DRIVER_OPTIONS[0])).strip()
+                                if curr_d_val not in DEFAULT_TRIP_DRIVER_OPTIONS:
+                                    matched_opt = DEFAULT_TRIP_DRIVER_OPTIONS[0]
+                                    for opt in DEFAULT_TRIP_DRIVER_OPTIONS:
+                                        if curr_d_val and (curr_d_val.lower() in opt.lower() or opt.lower() in curr_d_val.lower()):
+                                            matched_opt = opt
+                                            break
+                                    curr_d_val = matched_opt
+                                curr_d_idx = DEFAULT_TRIP_DRIVER_OPTIONS.index(curr_d_val) if curr_d_val in DEFAULT_TRIP_DRIVER_OPTIONS else 0
+
+                                qe_driver = st.selectbox(
+                                    "Driver Capacity & Availability",
+                                    options=DEFAULT_TRIP_DRIVER_OPTIONS,
+                                    index=curr_d_idx,
+                                    key=f"qe_drv_{selected_trip_id}_{qe_row.get('SignupID')}"
+                                )
+                                qe_paid = st.checkbox(
+                                    "Payment Received",
+                                    value=_is_truthy(qe_row.get("PaymentReceived")),
+                                    key=f"qe_pay_{selected_trip_id}_{qe_row.get('SignupID')}"
+                                )
+                                qe_phone = st.text_input(
+                                    "Phone Number",
+                                    value=str(qe_row.get("Phone", "")) if pd.notnull(qe_row.get("Phone")) and str(qe_row.get("Phone", "")).lower() != "nan" else "",
+                                    key=f"qe_ph_{selected_trip_id}_{qe_row.get('SignupID')}"
+                                )
+                                qe_notes = st.text_input(
+                                    "Questions or Concerns?",
+                                    value=str(qe_row.get("Questions", "")) if pd.notnull(qe_row.get("Questions")) and str(qe_row.get("Questions", "")).lower() != "nan" else "",
+                                    key=f"qe_q_{selected_trip_id}_{qe_row.get('SignupID')}"
+                                )
+                                if st.button(f"Save Updates for {qe_row.get('Name')}", type="primary", key=f"btn_qe_save_{selected_trip_id}", width="stretch"):
+                                    with st.spinner("Saving updates to Google Sheets and database..."):
+                                        ok, msg = update_trip_attendee(
+                                            trip_id=selected_trip_id,
+                                            signup_id=qe_row.get("SignupID"),
+                                            name=qe_row.get("Name"),
+                                            driving_capacity=qe_driver,
+                                            payment_received=qe_paid,
+                                            phone=qe_phone,
+                                            questions=qe_notes,
+                                            is_officer=is_officer
+                                        )
+                                        if ok:
+                                            st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                            st.success(f"Updated '{qe_row.get('Name')}' successfully.")
+                                            st.rerun()
+                                        else:
+                                            st.error(msg)
                 with c_exp:
                     csv_signups = filtered_signups.to_csv(index=False).encode('utf-8')
                     st.download_button(

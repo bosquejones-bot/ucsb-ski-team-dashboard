@@ -1214,29 +1214,19 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
         if df.empty or "Name" not in df.columns:
             return df, False
 
-        trips_path = get_trips_file(is_officer)
-        signups_path = get_trip_signups_file(is_officer)
-        trips_df = pd.read_csv(trips_path) if os.path.exists(trips_path) else pd.DataFrame()
-        signups_df = pd.read_csv(signups_path) if os.path.exists(signups_path) else pd.DataFrame()
+        try:
+            trips_df = load_trips(season=None, is_officer=is_officer)
+        except Exception:
+            trips_path = get_trips_file(is_officer)
+            trips_df = pd.read_csv(trips_path) if os.path.exists(trips_path) else pd.DataFrame()
 
-        # 1. Clean up orphaned signups from deleted trips in signups_df
-        valid_trip_ids: set[str] = set()
-        valid_trip_names_lower: set[str] = set()
-        if not trips_df.empty:
-            if "TripID" in trips_df.columns:
-                valid_trip_ids = {str(x).strip() for x in trips_df["TripID"].dropna() if str(x).strip() and str(x).strip().lower() not in ["nan", "none", "0.0", "0"]}
-            if "Name" in trips_df.columns:
-                valid_trip_names_lower = {str(x).strip().lower() for x in trips_df["Name"].dropna() if str(x).strip() and str(x).strip().lower() not in ["nan", "none", "0.0", "0"]}
+        try:
+            signups_df = load_trip_signups(season=None, is_officer=is_officer)
+        except Exception:
+            signups_path = get_trip_signups_file(is_officer)
+            signups_df = pd.read_csv(signups_path) if os.path.exists(signups_path) else pd.DataFrame()
 
-        if not signups_df.empty and (valid_trip_ids or valid_trip_names_lower):
-            s_tid = signups_df["TripID"].astype(str).str.strip() if "TripID" in signups_df.columns else pd.Series([""] * len(signups_df))
-            s_tname = signups_df["TripName"].astype(str).str.strip().str.lower() if "TripName" in signups_df.columns else pd.Series([""] * len(signups_df))
-            is_valid_signup = s_tid.isin(valid_trip_ids) | s_tname.isin(valid_trip_names_lower)
-            if not is_valid_signup.all():
-                signups_df = signups_df[is_valid_signup].copy().reset_index(drop=True)
-                save_trip_signups(signups_df, is_officer=is_officer)
-
-        # 2. Build authoritative trip metadata and attendee roster mapping
+        # Build authoritative trip metadata and attendee roster mapping
         trip_name_to_season: dict[str, str] = {}
         trip_canonical_names: dict[str, str] = {}
         trip_tracked_attendees: dict[str, set[str]] = {}
@@ -2913,7 +2903,7 @@ def get_cost_benchmarks(is_officer: bool = False) -> dict:
 
 # --- TRIP SIGN-UPS & CARPOOL TRACKING (GOOGLE FORMS & PAYMENT CHECKBOX) ---
 
-def load_trip_signups(trip_id_or_name: str = None, season: str = CURRENT_SEASON, is_officer: bool = False) -> pd.DataFrame:
+def load_trip_signups(trip_id_or_name: str = None, season: str = None, is_officer: bool = False) -> pd.DataFrame:
     """Load trip sign-up records, optionally filtered by trip and season."""
     ensure_data_initialized()
     if not is_officer:
@@ -3123,6 +3113,7 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
             "ID": "SignupID",
             "Name": "Name",
             "Phone": "Phone",
+            "Driver Capacity & Availability": "DrivingCapacity",
             "Driving Capacity (with gear)": "DrivingCapacity",
             "If you can drive (and how many passengers accounting for gear)": "DrivingCapacity",
             "Questions": "Questions",
@@ -3199,6 +3190,73 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
     except Exception as e:
         print(f"Error saving edited trip signups: {e}")
         return False
+
+
+def update_trip_attendee(trip_id: str, signup_id: str, name: str = None,
+                         driving_capacity: str = None, payment_received: bool = None,
+                         phone: str = None, questions: str = None,
+                         is_officer: bool = False) -> tuple[bool, str]:
+    """
+    Directly update a single attendee's details (driver status, payment, phone, questions).
+    Persists to Google Sheets and local storage immediately, and updates the ledger if payment status changes.
+    """
+    try:
+        all_signups = load_trip_signups(season=None, is_officer=is_officer)
+        if all_signups.empty:
+            return False, "No attendee signups found in database."
+
+        match_mask = pd.Series(False, index=all_signups.index)
+        if signup_id:
+            match_mask = all_signups["SignupID"].astype(str).str.strip() == str(signup_id).strip()
+        if not match_mask.any() and name and trip_id:
+            t_mask = all_signups["TripID"].astype(str).str.strip() == str(trip_id).strip()
+            n_mask = all_signups["Name"].astype(str).str.lower().str.strip() == str(name).lower().strip()
+            match_mask = t_mask & n_mask
+
+        if not match_mask.any():
+            return False, f"Attendee '{name or signup_id}' not found on this trip roster."
+
+        target_idx = all_signups[match_mask].index[0]
+        
+        # Payment handling with ledger sync
+        if payment_received is not None:
+            was_paid = _is_truthy(all_signups.loc[target_idx, "PaymentReceived"])
+            now_paid = bool(payment_received)
+            if was_paid != now_paid:
+                athlete_name = str(all_signups.loc[target_idx, "Name"]).strip().title()
+                trip_name = str(all_signups.loc[target_idx, "TripName"]).strip()
+                trip_season = str(all_signups.loc[target_idx, "Season"]).strip() or CURRENT_SEASON
+                if now_paid:
+                    trips_df = load_trips(season=None, is_officer=is_officer)
+                    t_match = trips_df[trips_df["TripID"] == trip_id] if trip_id else pd.DataFrame()
+                    trip_price = 95.0
+                    if not t_match.empty:
+                        t_cost = float(t_match.iloc[0].get("TotalCost", 0.0))
+                        t_att = max(1, int(t_match.iloc[0].get("Attendees", 1)))
+                        trip_price = round(t_cost / t_att, 2) if t_cost > 0 else 95.0
+                    record_trip_payment_in_ledger(athlete_name, trip_name, trip_id=trip_id, season=trip_season, amount=trip_price, is_officer=is_officer)
+                else:
+                    remove_trip_payment_from_ledger(athlete_name, trip_name, season=trip_season, is_officer=is_officer)
+                all_signups.loc[target_idx, "PaymentReceived"] = now_paid
+
+        if driving_capacity is not None:
+            all_signups.loc[target_idx, "DrivingCapacity"] = str(driving_capacity).strip()
+
+        if phone is not None:
+            all_signups.loc[target_idx, "Phone"] = str(phone).strip()
+
+        if questions is not None:
+            all_signups.loc[target_idx, "Questions"] = str(questions).strip()
+
+        save_trip_signups(all_signups, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
+        return True, "Updated attendee details successfully."
+    except Exception as e:
+        return False, f"Error updating attendee: {e}"
 
 
 def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: str, season: str = CURRENT_SEASON,
