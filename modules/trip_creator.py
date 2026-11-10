@@ -447,9 +447,9 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
 
         c_f1, c_f2, c_sync = st.columns([2, 1, 1.2])
         with c_f1:
-            form_title_input = st.text_input("Google Form Title (Editable)", value=st.session_state["ct_form_title"], key="ct_form_title")
+            form_title_input = st.text_input("Google Form Title (Editable)", key="ct_form_title")
         with c_f2:
-            form_price_input = st.number_input("Form Display Price per Skier ($)", min_value=0.0, value=float(st.session_state["ct_form_price"]), step=5.0, key="ct_form_price")
+            form_price_input = st.number_input("Form Display Price per Skier ($)", min_value=0.0, step=5.0, key="ct_form_price")
         with c_sync:
             st.write("")
             st.write("")
@@ -461,7 +461,6 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
 
         form_desc_input = st.text_area(
             "Form Header Description & Instructions (Editable)",
-            value=st.session_state["ct_form_desc"],
             height=160,
             key="ct_form_desc"
         )
