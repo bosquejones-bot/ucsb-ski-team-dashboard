@@ -2357,26 +2357,38 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
                 df = pd.DataFrame(columns=TRIP_COLS)
 
     try:
-        if "Season" not in df.columns:
+        # Enforce all text columns as object/str
+        text_cols = [
+            "TripID", "Season", "Name", "Destination", "TripType",
+            "StartDate", "EndDate", "Status", "AttendeeRoster", "Notes", "SchoolCoverageDetails"
+        ]
+        for col in text_cols:
+            if col not in df.columns:
+                df[col] = ""
+            else:
+                df[col] = df[col].astype(object).fillna("").astype(str)
+                if col in ["Notes", "SchoolCoverageDetails", "AttendeeRoster", "StartDate", "EndDate"]:
+                    df[col] = df[col].replace({"nan": "", "None": "", "NaN": "", "0.0": "", "0": ""})
+
+        if "Season" not in df.columns or (df["Season"].str.strip() == "").all():
             df["Season"] = "2025-2026"
-        if "TripType" not in df.columns:
+        if "TripType" not in df.columns or (df["TripType"].str.strip() == "").all():
             df["TripType"] = "Recreational"
-        if "AttendeeRoster" not in df.columns:
-            df["AttendeeRoster"] = ""
-        else:
-            df["AttendeeRoster"] = df["AttendeeRoster"].fillna("").astype(str).replace({"nan": "", "None": "", "NaN": "", "0.0": "", "0": ""})
-        if "SchoolFunding" not in df.columns:
-            df["SchoolFunding"] = 0.0
-        else:
-            df["SchoolFunding"] = pd.to_numeric(df["SchoolFunding"], errors="coerce").fillna(0.0)
-        if "NetCost" not in df.columns:
-            df["NetCost"] = df["TotalCost"] if "TotalCost" in df.columns else 0.0
-        else:
-            df["NetCost"] = pd.to_numeric(df["NetCost"], errors="coerce").fillna(df["TotalCost"] if "TotalCost" in df.columns else 0.0)
-        if "SchoolCoverageDetails" not in df.columns:
-            df["SchoolCoverageDetails"] = ""
-        else:
-            df["SchoolCoverageDetails"] = df["SchoolCoverageDetails"].fillna("").astype(str)
+
+        # Enforce all numeric columns
+        num_cols = [
+            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+            "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
+            "RevenueCollected", "SchoolFunding", "NetCost"
+        ]
+        for col in num_cols:
+            if col not in df.columns:
+                df[col] = 0.0
+            else:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+        if "NetCost" in df.columns and "TotalCost" in df.columns and "SchoolFunding" in df.columns:
+            df["NetCost"] = df["NetCost"].where(df["NetCost"] > 0, (df["TotalCost"] - df["SchoolFunding"]).clip(lower=0.0))
 
         if season and season != "All Seasons":
             return df[df["Season"] == season].copy().reset_index(drop=True)
@@ -2626,6 +2638,8 @@ def update_trip_status(trip_id: str, new_status: str, is_officer: bool = False) 
         mask = df["TripID"] == trip_id
         if not mask.any():
             return False
+        if "Status" in df.columns:
+            df["Status"] = df["Status"].astype(object)
         df.loc[mask, "Status"] = clean_status
         save_trips(df, is_officer=is_officer)
         return True
@@ -2672,6 +2686,29 @@ def update_trip_details(
         if not mask.any():
             return False, f"Trip '{trip_id}' not found."
 
+        # Ensure all text columns are object dtype so pandas never complains about assigning string values
+        text_cols = [
+            "TripID", "Season", "Name", "Destination", "TripType",
+            "StartDate", "EndDate", "Status", "AttendeeRoster", "Notes", "SchoolCoverageDetails"
+        ]
+        for col in text_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(object)
+            else:
+                df[col] = ""
+
+        # Ensure all numeric columns are float64
+        num_cols = [
+            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+            "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
+            "RevenueCollected", "SchoolFunding", "NetCost"
+        ]
+        for col in num_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            else:
+                df[col] = 0.0
+
         old_row = df.loc[mask].iloc[0]
         old_name = str(old_row.get("Name", "")).strip()
 
@@ -2690,9 +2727,9 @@ def update_trip_details(
         if miles is not None:
             df.loc[mask, "RoundTripMiles"] = max(0.0, float(miles))
         if attendees is not None:
-            df.loc[mask, "Attendees"] = max(1, int(attendees))
+            df.loc[mask, "Attendees"] = max(0, int(attendees))
         if vehicles is not None:
-            df.loc[mask, "Vehicles"] = max(1, int(vehicles))
+            df.loc[mask, "Vehicles"] = max(0, int(vehicles))
         if cabin is not None:
             df.loc[mask, "CabinCost"] = max(0.0, float(cabin))
         if food is not None:
@@ -2704,11 +2741,13 @@ def update_trip_details(
         if school_funding is not None:
             df.loc[mask, "SchoolFunding"] = max(0.0, float(school_funding))
         if school_coverage_details is not None:
-            df.loc[mask, "SchoolCoverageDetails"] = str(school_coverage_details).strip()
+            cov_s = str(school_coverage_details).strip()
+            df.loc[mask, "SchoolCoverageDetails"] = "" if cov_s.lower() in ["nan", "none", "0.0", "0"] else cov_s
         if status is not None and str(status).strip():
             df.loc[mask, "Status"] = str(status).strip()
         if notes is not None:
-            df.loc[mask, "Notes"] = str(notes).strip()
+            notes_s = str(notes).strip()
+            df.loc[mask, "Notes"] = "" if notes_s.lower() in ["nan", "none", "0.0", "0"] else notes_s
 
         # Recalculate total_cost and net_cost
         c_cabin = float(df.loc[mask, "CabinCost"].iloc[0]) if "CabinCost" in df.columns and pd.notnull(df.loc[mask, "CabinCost"].iloc[0]) else 0.0
