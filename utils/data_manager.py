@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import time
+import difflib
 import urllib.parse
 import pandas as pd
 import numpy as np
@@ -157,6 +158,154 @@ def format_phone_number(phone_str: str) -> str:
         return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
     
     return raw
+
+
+NICKNAMES_MAP: dict[str, str] = {
+    "will": "william", "bill": "william", "billy": "william",
+    "matt": "matthew", "mat": "matthew",
+    "chris": "christopher", "alex": "alexander",
+    "sam": "samuel", "ben": "benjamin",
+    "dan": "daniel", "danny": "daniel",
+    "mike": "michael", "mikey": "michael",
+    "dave": "david", "davy": "david",
+    "jake": "jacob", "nick": "nicholas",
+    "tom": "thomas", "tommy": "thomas",
+    "tim": "timothy", "timmy": "timothy",
+    "steve": "stephen", "steven": "stephen",
+    "rob": "robert", "bob": "robert", "bobby": "robert",
+    "jon": "jonathan", "john": "jonathan", "johnny": "jonathan",
+    "madi": "madison", "maddie": "madison",
+    "katie": "katherine", "kate": "katherine", "kat": "katherine",
+    "abby": "abigail", "abbi": "abigail",
+    "gabi": "gabriella", "gabbi": "gabriella", "gabby": "gabriella",
+    "liz": "elizabeth", "lizzie": "elizabeth", "beth": "elizabeth",
+    "cam": "cameron", "zach": "zachary", "zack": "zachary",
+    "josh": "joshua", "nate": "nathan", "nathaniel": "nathan"
+}
+
+
+def clean_phone_digits(phone_str) -> str:
+    """
+    Extract standard 10-digit US phone digits.
+    Strips country code '1', dashes, spaces, and punctuation.
+    Rejects dummy/placeholder numbers like '8055550100' and repeated digits.
+    """
+    if phone_str is None or pd.isna(phone_str):
+        return ""
+    digits = re.sub(r"\D", "", str(phone_str).strip())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return ""
+    if digits in ["8055550100", "1234567890", "0123456789"]:
+        return ""
+    if len(set(digits)) <= 2:  # Reject dummy numbers like 0000000000 or 5555555555
+        return ""
+    return digits
+
+
+def match_member_record(
+    incoming_name: str,
+    incoming_phone: str = None,
+    members_df: pd.DataFrame = None,
+    season: str = None,
+    is_officer: bool = False
+) -> tuple[pd.Series | None, str]:
+    """
+    Intelligent Hybrid Cascade Member Identification Engine.
+    Matches an athlete to their official registered profile using a 4-tier cascade:
+      Tier 1: Clean 10-digit Phone Number (highest precision, immune to spelling typos/nicknames)
+      Tier 2: Exact Name Match (case-insensitive & whitespace normalized)
+      Tier 3: Nickname + Last Name Match (e.g. Will Barney -> William Barney)
+      Tier 4: High-Confidence Fuzzy Name Match (>= 85% similarity via difflib)
+
+    Returns: (matched_member_series, match_tier_str)
+    """
+    if members_df is None or members_df.empty:
+        try:
+            members_df = load_members(season=None, is_officer=is_officer)
+        except Exception:
+            return None, "unmatched"
+
+    if members_df is None or members_df.empty:
+        return None, "unmatched"
+
+    # Filter to matching season candidates if available, otherwise search all members
+    target_season = season if season and season != "All Seasons" else None
+    search_df = members_df
+    if target_season and "Season" in members_df.columns:
+        s_matches = members_df[members_df["Season"] == target_season]
+        if not s_matches.empty:
+            search_df = s_matches
+
+    # --- TIER 1: CLEAN 10-DIGIT PHONE MATCH ---
+    c_phone = clean_phone_digits(incoming_phone)
+    if c_phone:
+        for idx, row in search_df.iterrows():
+            m_phone = clean_phone_digits(row.get("Phone"))
+            if m_phone and m_phone == c_phone:
+                return row, "phone"
+        # If not found in target season, search full members database
+        if search_df is not members_df:
+            for idx, row in members_df.iterrows():
+                m_phone = clean_phone_digits(row.get("Phone"))
+                if m_phone and m_phone == c_phone:
+                    return row, "phone"
+
+    # --- TIER 2: EXACT NAME MATCH (Case-insensitive & whitespace normalized) ---
+    clean_name = " ".join(str(incoming_name or "").strip().lower().split())
+    if not clean_name or clean_name in ["nan", "none"]:
+        return None, "unmatched"
+
+    for idx, row in search_df.iterrows():
+        m_name = " ".join(str(row.get("Name", "")).strip().lower().split())
+        if m_name == clean_name:
+            return row, "exact_name"
+
+    if search_df is not members_df:
+        for idx, row in members_df.iterrows():
+            m_name = " ".join(str(row.get("Name", "")).strip().lower().split())
+            if m_name == clean_name:
+                return row, "exact_name"
+
+    # --- TIER 3: NICKNAME + LAST NAME MATCH ---
+    tokens = clean_name.split()
+    if len(tokens) >= 2:
+        norm_first = NICKNAMES_MAP.get(tokens[0], tokens[0])
+        incoming_rest = tokens[1:]
+        for idx, row in search_df.iterrows():
+            m_tokens = str(row.get("Name", "")).strip().lower().split()
+            if len(m_tokens) >= 2 and m_tokens[1:] == incoming_rest:
+                m_first = NICKNAMES_MAP.get(m_tokens[0], m_tokens[0])
+                if norm_first == m_first:
+                    return row, "nickname"
+
+    # --- TIER 4: HIGH-CONFIDENCE FUZZY NAME MATCH (>= 85% similarity) ---
+    name_lookup = {}
+    for idx, row in search_df.iterrows():
+        m_raw = str(row.get("Name", "")).strip()
+        if m_raw and m_raw.lower() not in ["nan", "none"]:
+            key = " ".join(m_raw.lower().split())
+            name_lookup[key] = row
+
+    if name_lookup:
+        matches = difflib.get_close_matches(clean_name, list(name_lookup.keys()), n=1, cutoff=0.85)
+        if matches:
+            return name_lookup[matches[0]], "fuzzy_name"
+
+    # If still not found, check across all members with fuzzy
+    if search_df is not members_df:
+        full_name_lookup = {}
+        for idx, row in members_df.iterrows():
+            m_raw = str(row.get("Name", "")).strip()
+            if m_raw and m_raw.lower() not in ["nan", "none"]:
+                key = " ".join(m_raw.lower().split())
+                full_name_lookup[key] = row
+        matches = difflib.get_close_matches(clean_name, list(full_name_lookup.keys()), n=1, cutoff=0.85)
+        if matches:
+            return full_name_lookup[matches[0]], "fuzzy_name"
+
+    return None, "unmatched"
 
 
 def generate_next_member_id(all_df: pd.DataFrame, season: str = CURRENT_SEASON) -> str:
@@ -1281,6 +1430,7 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
         trip_name_to_season: dict[str, str] = {}
         trip_canonical_names: dict[str, str] = {}
         trip_tracked_attendees: dict[str, set[str]] = {}
+        trip_tracked_phones: dict[str, set[str]] = {}
         seasons_with_trips: set[str] = set()
 
         if not trips_df.empty and "Name" in trips_df.columns:
@@ -1295,17 +1445,20 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
                         seasons_with_trips.add(t_s)
                     if t_lower not in trip_tracked_attendees:
                         trip_tracked_attendees[t_lower] = set()
+                    if t_lower not in trip_tracked_phones:
+                        trip_tracked_phones[t_lower] = set()
 
                     roster_raw = str(t_row.get("AttendeeRoster", "")).strip()
                     if roster_raw and roster_raw.lower() not in ["nan", "none", "0.0", "0"]:
-                        names = {n.strip().lower() for n in roster_raw.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]}
+                        names = {" ".join(n.strip().lower().split()) for n in roster_raw.split(",") if n.strip() and n.strip().lower() not in ["nan", "none", "0.0", "0"]}
                         trip_tracked_attendees[t_lower].update(names)
 
         if not signups_df.empty and "TripName" in signups_df.columns:
             for _, s_row in signups_df.iterrows():
                 t_name = str(s_row.get("TripName", "")).strip()
                 t_s = str(s_row.get("Season", "")).strip()
-                m_s_name = str(s_row.get("Name", "")).strip().lower()
+                m_s_name = " ".join(str(s_row.get("Name", "")).strip().lower().split())
+                m_s_phone = clean_phone_digits(s_row.get("Phone", ""))
                 if t_name and t_name.lower() not in ["nan", "none", "0.0", "0"]:
                     t_lower = t_name.lower()
                     if t_lower not in trip_canonical_names:
@@ -1314,20 +1467,50 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
                         trip_name_to_season[t_lower] = t_s
                     if t_lower not in trip_tracked_attendees:
                         trip_tracked_attendees[t_lower] = set()
+                    if t_lower not in trip_tracked_phones:
+                        trip_tracked_phones[t_lower] = set()
                     if m_s_name and m_s_name not in ["nan", "none", "0.0", "0"]:
                         trip_tracked_attendees[t_lower].add(m_s_name)
+                    if m_s_phone:
+                        trip_tracked_phones[t_lower].add(m_s_phone)
 
         changed = False
 
-        # 3. Reconcile each member's TripsAttended against active trips and rosters
+        # 3. Reconcile each member's TripsAttended against active trips and rosters using Hybrid Cascade matching
         for idx, row in df.iterrows():
-            m_name = str(row.get("Name", "")).strip().lower()
+            m_name = " ".join(str(row.get("Name", "")).strip().lower().split())
             if not m_name or m_name in ["nan", "none"]:
                 continue
+            m_phone = clean_phone_digits(row.get("Phone", ""))
             m_season = str(row.get("Season", "")).strip()
             curr_raw = str(row.get("TripsAttended", "")).strip()
             if curr_raw.lower() in ["nan", "none", "0.0", "0"]:
                 curr_raw = ""
+
+            def _is_member_on_trip(t_key: str) -> bool:
+                attendees = trip_tracked_attendees.get(t_key, set())
+                phones = trip_tracked_phones.get(t_key, set())
+                # Tier 1: Clean Phone Match
+                if m_phone and m_phone in phones:
+                    return True
+                # Tier 2: Exact Name Match
+                if m_name in attendees:
+                    return True
+                # Tier 3: Nickname Match (Will -> William)
+                tokens = m_name.split()
+                if len(tokens) >= 2:
+                    norm_first = NICKNAMES_MAP.get(tokens[0], tokens[0])
+                    for att in attendees:
+                        att_tokens = att.split()
+                        if len(att_tokens) >= 2 and att_tokens[1:] == tokens[1:]:
+                            if norm_first == NICKNAMES_MAP.get(att_tokens[0], att_tokens[0]):
+                                return True
+                # Tier 4: High-Confidence Fuzzy Name Match (>= 85%)
+                if attendees:
+                    close = difflib.get_close_matches(m_name, list(attendees), n=1, cutoff=0.85)
+                    if close:
+                        return True
+                return False
 
             existing_trips = []
             if curr_raw:
@@ -1348,13 +1531,13 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
                         if t_lower not in trip_canonical_names:
                             continue
                         # If the trip exists in trips.csv, verify member is actually on its roster/signups
-                        if m_name not in trip_tracked_attendees.get(t_lower, set()):
+                        if not _is_member_on_trip(t_lower):
                             continue
                     else:
                         # Historical season with no records in trips.csv:
                         # If trip is actively tracked somewhere, ensure member is on it
                         if t_lower in trip_tracked_attendees:
-                            if m_name not in trip_tracked_attendees[t_lower]:
+                            if not _is_member_on_trip(t_lower):
                                 continue
 
                     canonical_val = trip_canonical_names.get(t_lower, t_str)
@@ -1362,8 +1545,8 @@ def reconcile_member_trips_attended(df: pd.DataFrame, is_officer: bool = False) 
                         existing_trips.append(canonical_val)
 
             # Add any trips for this member's season where the member is listed as an attendee
-            for t_lower, attendees in trip_tracked_attendees.items():
-                if m_name in attendees:
+            for t_lower in trip_tracked_attendees.keys():
+                if _is_member_on_trip(t_lower):
                     t_s = trip_name_to_season.get(t_lower, "")
                     if not t_s or not m_season or t_s == m_season or m_season == "All Seasons":
                         canonical_val = trip_canonical_names.get(t_lower, t_lower.title())
@@ -1921,31 +2104,49 @@ def reset_active_season_roster(new_season_name: str, is_officer: bool = False) -
         return False, str(e)
 
 
-def add_trip_to_member_history(member_name: str, trip_name: str, season: str = None, is_officer: bool = False) -> bool:
+def add_trip_to_member_history(member_name: str, trip_name: str, season: str = None, is_officer: bool = False, phone: str = None) -> bool:
     """
     Append trip_name to member's TripsAttended field in members.csv.
+    Uses Hybrid Cascade matching (phone -> exact -> nickname -> fuzzy) to resolve typos.
     Ensures no duplicates and preserves previous trips.
     """
     try:
         if not member_name or not trip_name:
             return False
         df = load_members(season=None, is_officer=is_officer)
-        clean_name = member_name.strip().lower()
+        if df.empty:
+            return False
         clean_trip = trip_name.strip()
 
-        # Match member by name and optionally season
-        target_season = season if season and season != "All Seasons" else CURRENT_SEASON
-        mask = df["Name"].astype(str).str.lower().str.strip() == clean_name
-        season_mask = mask & (df["Season"] == target_season)
-        if season_mask.any():
-            mask = season_mask
+        matched_member, _ = match_member_record(
+            incoming_name=member_name,
+            incoming_phone=phone,
+            members_df=df,
+            season=season,
+            is_officer=is_officer
+        )
 
-        indices = df[mask].index
-        if len(indices) == 0:
+        target_indices = []
+        if matched_member is not None:
+            target_indices = [matched_member.name]
+            canon_name = str(matched_member.get("Name", "")).strip().lower()
+            if canon_name:
+                extra_idx = df[df["Name"].astype(str).str.lower().str.strip() == canon_name].index.tolist()
+                target_indices = list(set(target_indices + extra_idx))
+        else:
+            clean_name = member_name.strip().lower()
+            target_season = season if season and season != "All Seasons" else CURRENT_SEASON
+            mask = df["Name"].astype(str).str.lower().str.strip() == clean_name
+            season_mask = mask & (df["Season"] == target_season)
+            if season_mask.any():
+                mask = season_mask
+            target_indices = df[mask].index.tolist()
+
+        if not target_indices:
             return False
 
         updated = False
-        for idx in indices:
+        for idx in target_indices:
             curr_trips_raw = str(df.loc[idx, "TripsAttended"]) if pd.notnull(df.loc[idx, "TripsAttended"]) else ""
             if curr_trips_raw.lower() in ["nan", "none"]:
                 curr_trips_raw = ""
@@ -1964,29 +2165,48 @@ def add_trip_to_member_history(member_name: str, trip_name: str, season: str = N
         return False
 
 
-def remove_trip_from_member_history(member_name: str, trip_name: str, season: str = None, is_officer: bool = False) -> bool:
+def remove_trip_from_member_history(member_name: str, trip_name: str, season: str = None, is_officer: bool = False, phone: str = None) -> bool:
     """
     Remove trip_name from member's TripsAttended field in members.csv.
+    Uses Hybrid Cascade matching (phone -> exact -> nickname -> fuzzy) to resolve typos.
     """
     try:
         if not member_name or not trip_name:
             return False
         df = load_members(season=None, is_officer=is_officer)
-        clean_name = member_name.strip().lower()
+        if df.empty:
+            return False
         clean_trip = trip_name.strip().lower()
 
-        mask = df["Name"].astype(str).str.lower().str.strip() == clean_name
-        if season and season != "All Seasons":
-            season_mask = mask & (df["Season"] == season)
-            if season_mask.any():
-                mask = season_mask
+        matched_member, _ = match_member_record(
+            incoming_name=member_name,
+            incoming_phone=phone,
+            members_df=df,
+            season=season,
+            is_officer=is_officer
+        )
 
-        indices = df[mask].index
-        if len(indices) == 0:
+        target_indices = []
+        if matched_member is not None:
+            target_indices = [matched_member.name]
+            canon_name = str(matched_member.get("Name", "")).strip().lower()
+            if canon_name:
+                extra_idx = df[df["Name"].astype(str).str.lower().str.strip() == canon_name].index.tolist()
+                target_indices = list(set(target_indices + extra_idx))
+        else:
+            clean_name = member_name.strip().lower()
+            mask = df["Name"].astype(str).str.lower().str.strip() == clean_name
+            if season and season != "All Seasons":
+                season_mask = mask & (df["Season"] == season)
+                if season_mask.any():
+                    mask = season_mask
+            target_indices = df[mask].index.tolist()
+
+        if not target_indices:
             return False
 
         updated = False
-        for idx in indices:
+        for idx in target_indices:
             curr_trips_raw = str(df.loc[idx, "TripsAttended"]) if pd.notnull(df.loc[idx, "TripsAttended"]) else ""
             if curr_trips_raw.lower() in ["nan", "none"]:
                 curr_trips_raw = ""
@@ -2348,25 +2568,61 @@ def parse_and_sync_google_form_df(df_form: pd.DataFrame, target_season: str = CU
 
 
 def fetch_and_sync_google_sheet(sheet_url: str, target_season: str = CURRENT_SEASON, is_officer: bool = False) -> tuple[bool, str, int]:
-    """Fetch a Google Sheet via public CSV export URL and sync responses."""
+    """Fetch a Google Sheet via public CSV export URL or connection and sync responses."""
     clean_url = sheet_url.strip()
-    gid_match = re.search(r"gid=([0-9]+)", clean_url)
-    gid_str = f"&gid={gid_match.group(1)}" if gid_match else ""
-    
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", clean_url)
-    if match:
-        sheet_id = match.group(1)
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_str}"
-    elif clean_url.startswith("http"):
-        csv_url = clean_url
-    else:
-        csv_url = f"https://docs.google.com/spreadsheets/d/{clean_url}/export?format=csv{gid_str}"
+    if not clean_url:
+        return False, "Please enter a valid Google Sheet URL or ID.", 0
 
-    try:
-        df_form = pd.read_csv(csv_url)
-        return parse_and_sync_google_form_df(df_form, target_season, is_officer=is_officer)
-    except Exception as e:
-        return False, f"Could not fetch Google Sheet. Verify link sharing ('Anyone with link can view') or upload CSV. Details: {e}", 0
+    df_form = None
+    conn = get_gsheets_connection()
+    if conn is not None:
+        try:
+            gid_match = re.search(r"gid=([0-9]+)", clean_url)
+            ws_param = int(gid_match.group(1)) if gid_match else 0
+            df_form = conn.read(spreadsheet=clean_url, worksheet=ws_param, ttl=0)
+            if df_form is not None and not df_form.empty:
+                df_form = df_form.dropna(how="all").reset_index(drop=True)
+                df_form = df_form.loc[:, ~df_form.columns.astype(str).str.contains(r"^Unnamed")].copy()
+        except Exception:
+            try:
+                df_form = conn.read(spreadsheet=clean_url, ttl=0)
+                if df_form is not None and not df_form.empty:
+                    df_form = df_form.dropna(how="all").reset_index(drop=True)
+                    df_form = df_form.loc[:, ~df_form.columns.astype(str).str.contains(r"^Unnamed")].copy()
+            except Exception:
+                pass
+
+    if df_form is None or df_form.empty:
+        gid_match = re.search(r"gid=([0-9]+)", clean_url)
+        gid_str = f"&gid={gid_match.group(1)}" if gid_match else ""
+        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", clean_url)
+        if match:
+            sheet_id = match.group(1)
+            csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_str}"
+        elif clean_url.startswith("http"):
+            csv_url = clean_url
+        else:
+            csv_url = f"https://docs.google.com/spreadsheets/d/{clean_url}/export?format=csv{gid_str}"
+
+        try:
+            import io
+            import urllib.request
+            req = urllib.request.Request(csv_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                content = response.read()
+                if b"<html" in content.lower() or b"<!doctype html" in content.lower():
+                    return False, "This Google Sheet is private and requires login. Please change sharing to 'Anyone with the link can view' (Viewer), or upload the response CSV below.", 0
+                df_form = pd.read_csv(io.BytesIO(content))
+        except Exception as e:
+            err_str = str(e)
+            if "401" in err_str or "403" in err_str or "unauthorized" in err_str.lower():
+                return False, "Access denied. The Google Sheet is not publicly shared. Please set sharing to 'Anyone with the link can view' (Viewer), or upload the CSV.", 0
+            return False, f"Could not connect to Google Sheet ({err_str}). Verify the URL and link sharing ('Anyone with link can view') or upload CSV directly.", 0
+
+    if df_form is None or df_form.empty:
+        return False, "No data rows found in the provided Google Sheet.", 0
+
+    return parse_and_sync_google_form_df(df_form, target_season, is_officer=is_officer)
 
 
 # --- TRIPS CREATOR & ESTIMATOR OPERATIONS ---
@@ -3387,10 +3643,11 @@ def update_trip_attendee(trip_id: str, signup_id: str, name: str = None,
 
 
 def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: str, season: str = CURRENT_SEASON,
-                            is_officer: bool = False) -> tuple[bool, str, int]:
+                                is_officer: bool = False) -> tuple[bool, str, int]:
     """
     Parse a Google Form response sheet specifically created for a trip sign-up.
     Extracts Name, Phone, Driving capacity, and Questions, initializing PaymentReceived=False.
+    Optimized for batch processing to avoid redundant Google Sheets API calls in loops.
     """
     try:
         all_signups = load_trip_signups(season=None, is_officer=is_officer)
@@ -3413,6 +3670,12 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
         added_count = 0
         updated_count = 0
 
+        # Load members once before loop for batch history update (prevents 429 quota exhaustion)
+        members_df = load_members(season=None, is_officer=is_officer)
+        members_updated = False
+        target_season = season if season and season != "All Seasons" else CURRENT_SEASON
+        clean_trip = trip_name.strip()
+
         for _, row in df_form.iterrows():
             name_val = str(row.get(col_map.get("name", ""), "")).strip()
             phone_val = str(row.get(col_map.get("phone", ""), "")).strip()
@@ -3426,11 +3689,37 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
             clean_driving = "Cannot drive" if driving_val.lower() in ["nan", "", "no"] else driving_val
             clean_questions = "" if questions_val.lower() in ["nan", "none", "n/a", "no"] else questions_val
 
-            # Check if this person already signed up for this trip
-            match_idx = all_signups[(all_signups["TripID"] == trip_id) & (all_signups["Name"].str.lower() == name_val.lower())].index
+            # Match member record using Intelligent Hybrid Cascade Matching (Phone -> Exact -> Nickname -> Fuzzy)
+            matched_member, match_type = match_member_record(
+                incoming_name=name_val,
+                incoming_phone=clean_phone or phone_val,
+                members_df=members_df,
+                season=target_season,
+                is_officer=is_officer
+            )
+
+            canonical_name = str(matched_member.get("Name", "")).strip().title() if matched_member is not None else name_val.title()
+
+            # Self-heal placeholder phone (e.g. 805-555-0100) or missing phone if attendee provided real phone
+            if matched_member is not None and clean_phone:
+                m_idx = matched_member.name
+                curr_digits = clean_phone_digits(members_df.loc[m_idx, "Phone"])
+                new_digits = clean_phone_digits(clean_phone)
+                if new_digits and not curr_digits:
+                    members_df.loc[m_idx, "Phone"] = clean_phone
+                    members_updated = True
+
+            # Check if this person already signed up for this trip (by canonical name or submitted name)
+            match_idx = all_signups[
+                (all_signups["TripID"] == trip_id) & (
+                    (all_signups["Name"].str.lower().str.strip() == canonical_name.lower()) |
+                    (all_signups["Name"].str.lower().str.strip() == name_val.lower().strip())
+                )
+            ].index
 
             if len(match_idx) > 0:
                 idx = match_idx[0]
+                all_signups.loc[idx, "Name"] = canonical_name
                 if clean_phone:
                     all_signups.loc[idx, "Phone"] = clean_phone
                 all_signups.loc[idx, "DrivingCapacity"] = clean_driving
@@ -3445,7 +3734,7 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
                     "TripID": trip_id,
                     "TripName": trip_name,
                     "Season": season,
-                    "Name": name_val.title(),
+                    "Name": canonical_name,
                     "Phone": clean_phone,
                     "DrivingCapacity": clean_driving,
                     "Questions": clean_questions,
@@ -3454,10 +3743,31 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
                 }])
                 all_signups = pd.concat([all_signups, new_row], ignore_index=True)
 
-            # Sync trip into member's TripsAttended profile
-            add_trip_to_member_history(name_val.title(), trip_name, season, is_officer=is_officer)
+            # In-memory batch sync of trip into member's TripsAttended profile
+            if not members_df.empty:
+                if matched_member is not None:
+                    target_m_indices = [matched_member.name]
+                else:
+                    m_mask = members_df["Name"].astype(str).str.lower().str.strip() == canonical_name.lower()
+                    s_mask = m_mask & (members_df["Season"] == target_season)
+                    if s_mask.any():
+                        m_mask = s_mask
+                    target_m_indices = members_df[m_mask].index.tolist()
 
+                for m_idx in target_m_indices:
+                    curr_trips_raw = str(members_df.loc[m_idx, "TripsAttended"]) if pd.notnull(members_df.loc[m_idx, "TripsAttended"]) else ""
+                    if curr_trips_raw.lower() in ["nan", "none"]:
+                        curr_trips_raw = ""
+                    trip_list = [t.strip() for t in curr_trips_raw.split(",") if t.strip()]
+                    if not any(t.lower() == clean_trip.lower() for t in trip_list):
+                        trip_list.append(clean_trip)
+                        members_df.loc[m_idx, "TripsAttended"] = ", ".join(trip_list)
+                        members_updated = True
+
+        # Batch persist signups and members in a single write each
         save_trip_signups(all_signups, is_officer=is_officer)
+        if members_updated:
+            save_members(members_df, is_officer=is_officer)
 
         # Update AttendeeRoster and Attendees count in trips file
         trips_df = load_trips(season=None, is_officer=is_officer)
@@ -3492,25 +3802,66 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
 
 def fetch_and_sync_trip_form_sheet(sheet_url: str, trip_id: str, trip_name: str, season: str = CURRENT_SEASON,
                                    is_officer: bool = False) -> tuple[bool, str, int]:
-    """Fetch a Google Sheet for trip sign-ups and parse responses."""
+    """Fetch a Google Sheet for trip sign-ups and parse responses with timeout and service-account fallback."""
     clean_url = sheet_url.strip()
-    gid_match = re.search(r"gid=([0-9]+)", clean_url)
-    gid_str = f"&gid={gid_match.group(1)}" if gid_match else ""
-    
-    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", clean_url)
-    if match:
-        sheet_id = match.group(1)
-        csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_str}"
-    elif clean_url.startswith("http"):
-        csv_url = clean_url
-    else:
-        csv_url = f"https://docs.google.com/spreadsheets/d/{clean_url}/export?format=csv{gid_str}"
+    if not clean_url:
+        return False, "Please enter a valid Google Sheet URL or ID.", 0
 
-    try:
-        df_form = pd.read_csv(csv_url)
-        return parse_and_sync_trip_form_df(df_form, trip_id, trip_name, season, is_officer=is_officer)
-    except Exception as e:
-        return False, f"Could not fetch trip sign-up sheet. Verify link sharing or upload CSV. Details: {e}", 0
+    df_form = None
+
+    # First attempt: Try reading via GSheetsConnection (service account)
+    # This works even for private sheets shared with the service account!
+    conn = get_gsheets_connection()
+    if conn is not None:
+        try:
+            gid_match = re.search(r"gid=([0-9]+)", clean_url)
+            ws_param = int(gid_match.group(1)) if gid_match else 0
+            df_form = conn.read(spreadsheet=clean_url, worksheet=ws_param, ttl=0)
+            if df_form is not None and not df_form.empty:
+                df_form = df_form.dropna(how="all").reset_index(drop=True)
+                df_form = df_form.loc[:, ~df_form.columns.astype(str).str.contains(r"^Unnamed")].copy()
+        except Exception:
+            try:
+                df_form = conn.read(spreadsheet=clean_url, ttl=0)
+                if df_form is not None and not df_form.empty:
+                    df_form = df_form.dropna(how="all").reset_index(drop=True)
+                    df_form = df_form.loc[:, ~df_form.columns.astype(str).str.contains(r"^Unnamed")].copy()
+            except Exception:
+                pass
+
+    # Second attempt: If conn.read did not return data, try public CSV export with strict timeout
+    if df_form is None or df_form.empty:
+        gid_match = re.search(r"gid=([0-9]+)", clean_url)
+        gid_str = f"&gid={gid_match.group(1)}" if gid_match else ""
+        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", clean_url)
+        if match:
+            sheet_id = match.group(1)
+            csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv{gid_str}"
+        elif clean_url.startswith("http"):
+            csv_url = clean_url
+        else:
+            csv_url = f"https://docs.google.com/spreadsheets/d/{clean_url}/export?format=csv{gid_str}"
+
+        try:
+            import io
+            import urllib.request
+            req = urllib.request.Request(csv_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                content = response.read()
+                # Check if Google returned an HTML login page instead of CSV
+                if b"<html" in content.lower() or b"<!doctype html" in content.lower():
+                    return False, "This Google Sheet is private and requires login. Please change sharing to 'Anyone with the link can view' (Viewer), or upload the response CSV below.", 0
+                df_form = pd.read_csv(io.BytesIO(content))
+        except Exception as e:
+            err_str = str(e)
+            if "401" in err_str or "403" in err_str or "unauthorized" in err_str.lower():
+                return False, "Access denied. The Google Sheet is not publicly shared. Please set sharing to 'Anyone with the link can view' (Viewer), or upload the CSV.", 0
+            return False, f"Could not connect to Google Sheet ({err_str}). Verify the URL and link sharing ('Anyone with link can view') or upload CSV directly.", 0
+
+    if df_form is None or df_form.empty:
+        return False, "No data rows found in the provided Google Sheet.", 0
+
+    return parse_and_sync_trip_form_df(df_form, trip_id, trip_name, season, is_officer=is_officer)
 
 
 def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
@@ -3519,7 +3870,15 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
                       is_officer: bool = False) -> bool:
     """Manually add an attendee to a trip roster and synchronize member trip history."""
     try:
-        clean_name = name.strip().title()
+        clean_phone = format_phone_number(phone) if phone else ""
+        matched_member, _ = match_member_record(
+            incoming_name=name,
+            incoming_phone=clean_phone or phone,
+            season=season,
+            is_officer=is_officer
+        )
+        clean_name = str(matched_member.get("Name", "")).strip().title() if matched_member is not None else name.strip().title()
+
         all_signups = load_trip_signups(trip_id_or_name=None, is_officer=is_officer)
         s_id = f"SIGNUP-{len(all_signups) + 1:03d}"
         new_row = pd.DataFrame([{
@@ -3528,7 +3887,7 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
             "TripName": trip_name.strip(),
             "Season": season,
             "Name": clean_name,
-            "Phone": format_phone_number(phone),
+            "Phone": clean_phone,
             "DrivingCapacity": driving_capacity.strip(),
             "Questions": questions.strip(),
             "PaymentReceived": bool(payment_received),
@@ -3559,7 +3918,7 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
                     save_trips(trips_df, is_officer=is_officer)
 
         # Synchronize trip to member's TripsAttended history in members file
-        add_trip_to_member_history(clean_name, trip_name.strip(), season, is_officer=is_officer)
+        add_trip_to_member_history(clean_name, trip_name.strip(), season, is_officer=is_officer, phone=clean_phone)
 
         # If payment received was checked on manual add form, record in ledger
         if payment_received:

@@ -469,8 +469,8 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         st.caption("Customize the fields athletes fill out when signing up. Add new fields, edit questions, or remove fields below.")
 
         default_form_fields = [
-            {"Field": "Full Name", "Format": "Short Answer", "Required": True, "Detail": "Athlete first and last name"},
-            {"Field": "Phone Number", "Format": "Short Answer", "Required": True, "Detail": "Cell phone for carpool group chat"},
+            {"Field": "Full Name", "Format": "Short Answer", "Required": True, "Detail": "First and last name as registered on team membership"},
+            {"Field": "Phone Number", "Format": "Short Answer", "Required": True, "Detail": "Cell phone number (e.g. 805-555-1234) for verification & carpools"},
             {"Field": "If you can drive (and how many passengers accounting for gear)", "Format": "Multiple Choice", "Required": True, "Detail": "Cannot drive / 1 passenger + gear / 2 passengers + gear / 3 passengers + gear / 4+ passengers + gear"},
             {"Field": "Questions or Concerns?", "Format": "Paragraph", "Required": False, "Detail": "Dietary requests, gear questions, or schedule notes"}
         ]
