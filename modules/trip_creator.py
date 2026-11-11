@@ -736,6 +736,11 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
             # Signups data for this trip (load all signups for this trip regardless of season filter)
             signups_df = load_trip_signups(trip_id_or_name=selected_trip_id, season=None, is_officer=is_officer)
+            ss_signups_key = f"_session_signups_{selected_trip_id}"
+            if signups_df.empty and ss_signups_key in st.session_state and isinstance(st.session_state[ss_signups_key], pd.DataFrame) and not st.session_state[ss_signups_key].empty:
+                signups_df = st.session_state[ss_signups_key].copy()
+            elif not signups_df.empty:
+                st.session_state[ss_signups_key] = signups_df.copy()
 
             # --- TOP ROW: OPERATIONS METRICS DASHBOARD ---
             total_signups = len(signups_df)
@@ -1316,6 +1321,10 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                         with st.spinner("Saving attendee updates and payments to Google Sheets..."):
                             if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
                                 st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                # Immediately refresh the session cache for this trip
+                                reloaded = load_trip_signups(trip_id_or_name=selected_trip_id, season=None, is_officer=is_officer)
+                                if not reloaded.empty:
+                                    st.session_state[ss_signups_key] = reloaded.copy()
                                 st.success("Attendee updates and payment status saved directly to Google Sheets and database.")
                                 st.rerun()
                             else:
@@ -1388,6 +1397,9 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                             )
                                             if ok:
                                                 st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                                reloaded = load_trip_signups(trip_id_or_name=selected_trip_id, season=None, is_officer=is_officer)
+                                                if not reloaded.empty:
+                                                    st.session_state[ss_signups_key] = reloaded.copy()
                                                 st.success(f"Updated '{qe_row.get('Name')}' successfully.")
                                                 st.rerun()
                                             else:
