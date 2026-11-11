@@ -89,7 +89,7 @@ def get_events_file(is_officer: bool = False) -> str:
 
 TRIP_COLS = [
     "TripID", "Season", "Name", "Destination", "TripType", "StartDate", "EndDate",
-    "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+    "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CostPerSkier", "CabinCost",
     "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
     "RevenueCollected", "Status", "AttendeeRoster", "Notes",
     "SchoolFunding", "NetCost", "SchoolCoverageDetails"
@@ -2706,7 +2706,7 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
 
         # Enforce all numeric columns
         num_cols = [
-            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CostPerSkier", "CabinCost",
             "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
             "RevenueCollected", "SchoolFunding", "NetCost"
         ]
@@ -2718,6 +2718,13 @@ def load_trips(season: str = None, is_officer: bool = False) -> pd.DataFrame:
 
         if "NetCost" in df.columns and "TotalCost" in df.columns and "SchoolFunding" in df.columns:
             df["NetCost"] = df["NetCost"].where(df["NetCost"] > 0, (df["TotalCost"] - df["SchoolFunding"]).clip(lower=0.0))
+
+        if "CostPerSkier" in df.columns:
+            mask_zero_cps = (df["CostPerSkier"] <= 0) & ((df["NetCost"] > 0) | (df["TotalCost"] > 0))
+            if mask_zero_cps.any():
+                cost_src = df.loc[mask_zero_cps, "NetCost"].where(df.loc[mask_zero_cps, "NetCost"] > 0, df.loc[mask_zero_cps, "TotalCost"])
+                att_src = df.loc[mask_zero_cps, "Attendees"].clip(lower=1.0)
+                df.loc[mask_zero_cps, "CostPerSkier"] = (cost_src / att_src).round(2)
 
         if season and season != "All Seasons":
             return df[df["Season"] == season].copy().reset_index(drop=True)
@@ -2748,12 +2755,14 @@ def save_trips(df: pd.DataFrame, is_officer: bool = False):
 
 
 def add_created_trip(name: str, destination: str, trip_type: str, start_date: str, end_date: str,
-                     nights: int, miles: float, attendees: int, vehicles: int, cabin: float,
-                     food: float, tickets: float, gas: float, attendee_roster: list,
+                     nights: int, miles: float, attendees: int, vehicles: int,
+                     cost_per_skier: float = None,
+                     cabin: float = 0.0, food: float = 0.0, tickets: float = 0.0, gas: float = 0.0,
+                     attendee_roster: list = None,
                      status: str = "Planning", notes: str = "", season: str = CURRENT_SEASON,
                      is_officer: bool = False, school_funding: float = 0.0, net_cost: float = None,
                      school_coverage_details: str = "") -> bool:
-    """Create a new trip in the trip creator with attendee roster, school funding, and trip type."""
+    """Create a new trip in the trip creator with attendee roster, school funding, and cost per skier."""
     try:
         df = load_trips(season=None, is_officer=is_officer)
         next_id = f"TRIP-{len(df) + 1:03d}"
@@ -2777,11 +2786,24 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
                 attendee_roster = combined_roster
                 comp_members_to_signup = comp_df.to_dict("records")
 
-        if len(attendee_roster) > attendees:
+        if len(attendee_roster or []) > attendees:
             attendees = len(attendee_roster)
 
-        total_cost = float(cabin + food + tickets + gas)
+        # Financial variables: Cost per Skier is primary
+        if cost_per_skier is not None and float(cost_per_skier) > 0:
+            cps = float(cost_per_skier)
+            calc_total = float(cps * max(1, attendees))
+        else:
+            calc_breakdown = float((cabin or 0.0) + (food or 0.0) + (tickets or 0.0) + (gas or 0.0))
+            if calc_breakdown > 0:
+                calc_total = calc_breakdown
+                cps = round(calc_total / max(1, attendees), 2)
+            else:
+                cps = 0.0
+                calc_total = 0.0
+
         funding_amt = float(school_funding) if school_funding is not None else 0.0
+        total_cost = float(calc_total)
         final_net = float(net_cost) if net_cost is not None else max(0.0, total_cost - funding_amt)
         roster_str = ", ".join(attendee_roster) if attendee_roster else ""
         
@@ -2797,10 +2819,11 @@ def add_created_trip(name: str, destination: str, trip_type: str, start_date: st
             "RoundTripMiles": float(miles),
             "Attendees": int(attendees),
             "Vehicles": int(vehicles),
-            "CabinCost": float(cabin),
-            "FoodAlcoholCost": float(food),
-            "LiftTicketsCost": float(tickets),
-            "GasCost": float(gas),
+            "CostPerSkier": float(cps),
+            "CabinCost": float(cabin or 0.0),
+            "FoodAlcoholCost": float(food or 0.0),
+            "LiftTicketsCost": float(tickets or 0.0),
+            "GasCost": float(gas or 0.0),
             "TotalCost": float(total_cost),
             "SchoolFunding": float(funding_amt),
             "NetCost": float(final_net),
@@ -2994,6 +3017,7 @@ def update_trip_details(
     miles: float = None,
     attendees: int = None,
     vehicles: int = None,
+    cost_per_skier: float = None,
     cabin: float = None,
     food: float = None,
     tickets: float = None,
@@ -3007,7 +3031,7 @@ def update_trip_details(
     is_officer: bool = False
 ) -> tuple[bool, str]:
     """
-    Update details and budget breakdown for an existing trip.
+    Update details and cost per skier for an existing trip.
     Synchronizes trip name across signups and ledger entries if changed.
     Persists updates directly to CSV and Google Sheets.
     """
@@ -3034,7 +3058,7 @@ def update_trip_details(
 
         # Ensure all numeric columns are float64
         num_cols = [
-            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CabinCost",
+            "Nights", "RoundTripMiles", "Attendees", "Vehicles", "CostPerSkier", "CabinCost",
             "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost",
             "RevenueCollected", "SchoolFunding", "NetCost"
         ]
@@ -3065,6 +3089,8 @@ def update_trip_details(
             df.loc[mask, "Attendees"] = max(0, int(attendees))
         if vehicles is not None:
             df.loc[mask, "Vehicles"] = max(0, int(vehicles))
+        if cost_per_skier is not None:
+            df.loc[mask, "CostPerSkier"] = max(0.0, float(cost_per_skier))
         if cabin is not None:
             df.loc[mask, "CabinCost"] = max(0.0, float(cabin))
         if food is not None:
@@ -3084,17 +3110,35 @@ def update_trip_details(
             notes_s = str(notes).strip()
             df.loc[mask, "Notes"] = "" if notes_s.lower() in ["nan", "none", "0.0", "0"] else notes_s
 
-        # Recalculate total_cost and net_cost
+        # Recalculate total_cost, net_cost, and CostPerSkier
+        cur_att = int(df.loc[mask, "Attendees"].iloc[0]) if "Attendees" in df.columns else 1
+        cur_cps = float(df.loc[mask, "CostPerSkier"].iloc[0]) if "CostPerSkier" in df.columns and pd.notnull(df.loc[mask, "CostPerSkier"].iloc[0]) else 0.0
+
         c_cabin = float(df.loc[mask, "CabinCost"].iloc[0]) if "CabinCost" in df.columns and pd.notnull(df.loc[mask, "CabinCost"].iloc[0]) else 0.0
         c_food = float(df.loc[mask, "FoodAlcoholCost"].iloc[0]) if "FoodAlcoholCost" in df.columns and pd.notnull(df.loc[mask, "FoodAlcoholCost"].iloc[0]) else 0.0
         c_tickets = float(df.loc[mask, "LiftTicketsCost"].iloc[0]) if "LiftTicketsCost" in df.columns and pd.notnull(df.loc[mask, "LiftTicketsCost"].iloc[0]) else 0.0
         c_gas = float(df.loc[mask, "GasCost"].iloc[0]) if "GasCost" in df.columns and pd.notnull(df.loc[mask, "GasCost"].iloc[0]) else 0.0
-        calc_total = c_cabin + c_food + c_tickets + c_gas
+        calc_breakdown = c_cabin + c_food + c_tickets + c_gas
+
+        if cost_per_skier is not None and cur_cps > 0:
+            calc_total = cur_cps * max(1, cur_att)
+        elif calc_breakdown > 0:
+            calc_total = calc_breakdown
+        elif cur_cps > 0:
+            calc_total = cur_cps * max(1, cur_att)
+        else:
+            calc_total = 0.0
+
         final_total = float(total_cost) if total_cost is not None else calc_total
         df.loc[mask, "TotalCost"] = final_total
 
         s_funding = float(df.loc[mask, "SchoolFunding"].iloc[0]) if "SchoolFunding" in df.columns and pd.notnull(df.loc[mask, "SchoolFunding"].iloc[0]) else 0.0
         final_net = float(net_cost) if net_cost is not None else max(0.0, final_total - s_funding)
+        df.loc[mask, "NetCost"] = final_net
+
+        # Ensure CostPerSkier is set
+        if cur_cps <= 0 and final_net > 0:
+            df.loc[mask, "CostPerSkier"] = round(final_net / max(1, cur_att), 2)
         df.loc[mask, "NetCost"] = final_net
 
         save_trips(df, is_officer=is_officer)
@@ -3401,9 +3445,13 @@ def record_trip_payment_in_ledger(athlete_name: str, trip_name: str, trip_id: st
 
             if not trip_match.empty:
                 t_row = trip_match.iloc[0]
-                t_cost = float(t_row.get("NetCost", t_row.get("TotalCost", 0.0)))
-                t_att = max(1, int(t_row.get("Attendees", 1)))
-                final_amount = round(t_cost / t_att, 2) if t_cost > 0 else 0.0
+                t_cps = float(t_row.get("CostPerSkier", 0.0))
+                if t_cps > 0:
+                    final_amount = t_cps
+                else:
+                    t_cost = float(t_row.get("NetCost", t_row.get("TotalCost", 0.0)))
+                    t_att = max(1, int(t_row.get("Attendees", 1)))
+                    final_amount = round(t_cost / t_att, 2) if t_cost > 0 else 0.0
             else:
                 final_amount = 95.0
 

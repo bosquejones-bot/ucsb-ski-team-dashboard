@@ -246,15 +246,15 @@ def render_trip_planner_tab(is_officer: bool = False):
     if not trips_df.empty:
         display_trips = trips_df[[
             "Name", "Destination", "StartDate", "Nights", "Attendees",
-            "CabinCost", "FoodAlcoholCost", "LiftTicketsCost", "GasCost", "TotalCost", "Status"
+            "CostPerSkier", "TotalCost", "Status"
         ]].copy()
         
         display_trips.columns = [
             "Trip Name", "Destination", "Date", "Nights", "Skiers",
-            "Cabin ($)", "Food/Drink ($)", "Tickets ($)", "Gas ($)", "Total Outflow ($)", "Status"
+            "Cost / Skier ($)", "Total Outflow ($)", "Status"
         ]
         
-        for c in ["Cabin ($)", "Food/Drink ($)", "Tickets ($)", "Gas ($)", "Total Outflow ($)"]:
+        for c in ["Cost / Skier ($)", "Total Outflow ($)"]:
             display_trips[c] = display_trips[c].apply(lambda x: f"${x:,.2f}" if pd.notnull(x) else "$0.00")
 
         st.dataframe(display_trips, width="stretch", hide_index=True)

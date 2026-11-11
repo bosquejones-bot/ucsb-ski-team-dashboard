@@ -329,95 +329,35 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 key=f"ct_miles_{destination_choice}"
             )
 
-        st.markdown("##### Budget Breakdown")
-        if trip_type == "Competition":
-            st.caption("Enter gross estimated costs below. Use the checkboxes to designate items covered by UCSB.")
-            c_c1, c_c2 = st.columns(2)
-            with c_c1:
-                cabin_cost = st.number_input("Cabin / Housing ($)", min_value=0.0, value=2400.0, step=50.0, key="ct_cabin")
-                school_covers_cabin = st.checkbox("UCSB covers Housing", value=False, key="ct_sc_cabin")
-            with c_c2:
-                food_cost = st.number_input("Food & Drinks ($)", min_value=0.0, value=400.0, step=25.0, key="ct_food")
-                school_covers_food = st.checkbox("UCSB covers Food & Drinks", value=False, key="ct_sc_food")
+        st.markdown("##### Trip Pricing")
+        c_p1, c_p2 = st.columns([1, 1.5])
+        with c_p1:
+            cost_per_skier = st.number_input(
+                "Cost per Skier ($)",
+                min_value=0.0,
+                max_value=2500.0,
+                value=125.0,
+                step=5.0,
+                help="The flat fee charged to each attending athlete for this trip.",
+                key="ct_cost_per_skier"
+            )
+        with c_p2:
+            total_projected_outflow = float(round(attendees_count * cost_per_skier, 2))
+            st.metric(
+                label="Total Projected Trip Outflow",
+                value=f"${total_projected_outflow:,.2f}",
+                delta=f"{attendees_count} skiers x ${cost_per_skier:,.2f}"
+            )
 
-            c_c3, c_c4, c_c5 = st.columns(3)
-            with c_c3:
-                ticket_price = st.number_input(
-                    "Ticket Price ($ / Skier)",
-                    min_value=0.0,
-                    value=120.0,
-                    step=10.0,
-                    help="Per-competitor lift ticket price.",
-                    key="ct_tix_price"
-                )
-            with c_c4:
-                # Lift Tickets calculation in budget breakdown is expected attendees times ticket price
-                calc_lift_tickets = float(round(attendees_count * ticket_price, 2))
-                lift_tickets = st.number_input(
-                    "Lift Tickets ($)",
-                    min_value=0.0,
-                    value=calc_lift_tickets,
-                    step=50.0,
-                    help=f"Calculated as {attendees_count} expected attendees x ${ticket_price:,.2f} ticket price.",
-                    key=f"ct_tix_{attendees_count}_{ticket_price}"
-                )
-                school_covers_tickets = st.checkbox("UCSB covers Lift Tickets", value=False, key="ct_sc_tickets")
-            with c_c5:
-                # Calculate Estimated Gas using round trip miles times 0.70 times amount of vehicles
-                calc_gas = float(round(miles * 0.70 * vehicles, 2))
-                gas_cost = st.number_input(
-                    "Estimated Gas ($)",
-                    min_value=0.0,
-                    value=calc_gas,
-                    step=20.0,
-                    help=f"Calculated as $0.70/mile x {miles} RT miles x {vehicles} vehicle(s).",
-                    key=f"ct_gas_{destination_choice}_{miles}_{vehicles}"
-                )
-                school_covers_gas = st.checkbox("UCSB covers Gas", value=False, key="ct_sc_gas")
-
-            covered_items = []
-            school_funding_amount = 0.0
-            if school_covers_cabin:
-                covered_items.append("Housing")
-                school_funding_amount += cabin_cost
-            if school_covers_food:
-                covered_items.append("Food")
-                school_funding_amount += food_cost
-            if school_covers_tickets:
-                covered_items.append("Lift Tickets")
-                school_funding_amount += lift_tickets
-            if school_covers_gas:
-                covered_items.append("Gas")
-                school_funding_amount += gas_cost
-
-            school_coverage_details = ", ".join(covered_items)
-            total_trip_cost = cabin_cost + food_cost + lift_tickets + gas_cost
-            net_trip_cost = max(0.0, total_trip_cost - school_funding_amount)
-            calculated_ticket_price = net_trip_cost / max(1, attendees_count)
-
-            st.write("")
-            b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Gross Budget (Grant Requisition)", f"${total_trip_cost:,.2f}", help="Total expenditure proposal for UCSB.")
-            b2.metric("UCSB Subsidy", f"${school_funding_amount:,.2f}", delta=f"{len(covered_items)} item(s) covered" if covered_items else None)
-            b3.metric("Net Team Outflow", f"${net_trip_cost:,.2f}", help="Remaining balance paid by club dues or athletes.")
-            b4.metric("Fee / Competitor", f"${calculated_ticket_price:,.2f}", help="Per-person share charged to participating competitors.")
-        else:
-            # Recreational trip: Lift Tickets ($) and Estimated Gas ($) not available
-            c_c1, c_c2 = st.columns(2)
-            with c_c1:
-                cabin_cost = st.number_input("Cabin / Housing ($)", min_value=0.0, value=2400.0, step=50.0, key="ct_cabin")
-            with c_c2:
-                food_cost = st.number_input("Food & Drinks ($)", min_value=0.0, value=400.0, step=25.0, key="ct_food")
-            ticket_price = 0.0
-            lift_tickets = 0.0
-            gas_cost = 0.0
-            school_funding_amount = 0.0
-            school_coverage_details = ""
-            total_trip_cost = cabin_cost + food_cost + lift_tickets + gas_cost
-            net_trip_cost = total_trip_cost
-            calculated_ticket_price = total_trip_cost / max(1, attendees_count)
-            st.caption("*Lift Tickets and Estimated Gas options are only available for competition trips.*")
-            st.caption(f"Estimated Total Trip Outflow: **\\${total_trip_cost:,.2f}** &bull; Calculated Per-Skier Share: **\\${calculated_ticket_price:,.2f}**")
+        cabin_cost = 0.0
+        food_cost = 0.0
+        lift_tickets = 0.0
+        gas_cost = 0.0
+        school_funding_amount = 0.0
+        school_coverage_details = ""
+        total_trip_cost = total_projected_outflow
+        net_trip_cost = total_projected_outflow
+        calculated_ticket_price = cost_per_skier
 
         trip_notes = st.text_input("Internal Trip Notes", placeholder="e.g. Leaving IV Friday afternoon, condo reservation #1234", key="ct_notes")
 
@@ -460,7 +400,7 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
         with c_sync:
             st.write("")
             st.write("")
-            if st.button("Sync with Trip Logistics", help="Update form title, price, and description from the latest budget & dates above", key="btn_sync_form_details"):
+            if st.button("Sync with Trip Logistics", help="Update form title, price, and description from the latest pricing & dates above", key="btn_sync_form_details"):
                 st.session_state["ct_form_title"] = default_title
                 st.session_state["ct_form_price"] = float(round(calculated_ticket_price, 0))
                 st.session_state["ct_form_desc"] = default_desc
@@ -581,18 +521,19 @@ def _render_create_trip_form(selected_season: str, dest_options: list, is_office
                 miles=miles,
                 attendees=attendees_count,
                 vehicles=vehicles,
-                cabin=cabin_cost,
-                food=food_cost,
-                tickets=lift_tickets,
-                gas=gas_cost,
+                cost_per_skier=cost_per_skier,
+                cabin=0.0,
+                food=0.0,
+                tickets=0.0,
+                gas=0.0,
                 attendee_roster=[],
                 status=status,
                 notes=trip_notes,
                 season=target_trip_season,
                 is_officer=is_officer,
-                school_funding=school_funding_amount,
+                school_funding=0.0,
                 net_cost=net_trip_cost,
-                school_coverage_details=school_coverage_details
+                school_coverage_details=""
             )
             if success:
                 st.session_state["trip_created_show_script"] = True
@@ -754,10 +695,24 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             raw_att = _safe_int(selected_trip_row.get("Attendees"), default=24, min_val=0)
             target_attendees = raw_att if raw_att > 0 else (total_signups if total_signups > 0 else 24)
             target_vehicles = _safe_int(selected_trip_row.get("Vehicles"), default=0, min_val=0)
+
+            # Pricing: Cost per Skier is primary variable
+            raw_cps = _safe_float(selected_trip_row.get("CostPerSkier"), default=0.0, min_val=0.0)
             total_cost = _safe_float(selected_trip_row.get("TotalCost"), default=0.0, min_val=0.0)
             school_funding = _safe_float(selected_trip_row.get("SchoolFunding"), default=0.0, min_val=0.0)
             net_cost = _safe_float(selected_trip_row.get("NetCost"), default=max(0.0, total_cost - school_funding), min_val=0.0)
-            approx_ticket_price = net_cost / max(1, target_attendees)
+
+            if raw_cps > 0:
+                cost_per_skier = raw_cps
+            elif net_cost > 0:
+                cost_per_skier = round(net_cost / max(1, target_attendees), 2)
+            elif total_cost > 0:
+                cost_per_skier = round(total_cost / max(1, target_attendees), 2)
+            else:
+                cost_per_skier = 0.0
+
+            approx_ticket_price = cost_per_skier
+            total_expected_outflow = round(cost_per_skier * target_attendees, 2)
 
             paid_df = signups_df[signups_df["PaymentReceived"] == True] if not signups_df.empty else pd.DataFrame()
             paid_count = len(paid_df)
@@ -784,7 +739,7 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             driver_script_code = generate_driver_sheet_script(selected_trip_row["Name"], driver_records)
             slug_trip_name = selected_trip_row["Name"].lower().replace(" ", "_")
 
-            cost_per_person_str = f"${approx_ticket_price:,.0f}" if approx_ticket_price == int(approx_ticket_price) else f"${approx_ticket_price:,.2f}"
+            cost_per_person_str = f"${cost_per_skier:,.0f}" if cost_per_skier == int(cost_per_skier) else f"${cost_per_skier:,.2f}"
 
             m1, m2, m3, m4 = st.columns(4)
             m1.metric(
@@ -792,9 +747,9 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                 value=f"{total_signups} skiers"
             )
             m2.metric(
-                label="Fee per Competitor" if selected_trip_row.get("TripType") == "Competition" else "Trip Cost per Person",
+                label="Cost per Skier",
                 value=cost_per_person_str,
-                delta=f"-${school_funding:,.0f} school funded" if school_funding > 0 else None,
+                delta=f"Total Outflow: ${total_expected_outflow:,.0f}" if total_expected_outflow > 0 else None,
                 delta_color="normal"
             )
             m3.metric(
@@ -808,14 +763,14 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
             st.divider()
 
-            # --- EDIT TRIP DETAILS & PRICING BREAKDOWN ---
-            with st.expander(f"Edit Trip Details & Pricing Breakdown - {selected_trip_row['Name']}", expanded=False):
+            # --- EDIT TRIP DETAILS & COST PER SKIER ---
+            with st.expander(f"Edit Trip Details & Cost per Skier - {selected_trip_row['Name']}", expanded=False):
                 if not is_officer:
                     st.info("Officer access required to edit trip details. Enter the officer password in the sidebar to unlock.")
                 elif not can_edit:
                     st.info("Officer editing mode is currently disabled. Toggle 'Enable Editing Mode' in the sidebar to edit trip details.")
                 else:
-                    st.markdown(f"##### Edit Logistics & Budget for **{selected_trip_row['Name']}**")
+                    st.markdown(f"##### Edit Logistics & Pricing for **{selected_trip_row['Name']}**")
                     with st.form(f"form_edit_trip_{selected_trip_id}"):
                         e_c1, e_c2 = st.columns(2)
                         with e_c1:
@@ -888,67 +843,31 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 step=10
                             )
 
-                        st.markdown("###### Pricing Breakdown & Outflows")
-                        b1, b2, b3, b4 = st.columns(4)
-                        with b1:
-                            edit_cabin = st.number_input(
-                                "Cabin / Lodging Cost ($)",
+                        st.markdown("###### Trip Pricing")
+                        e_p1, e_p2 = st.columns([1, 1.5])
+                        with e_p1:
+                            edit_cps = st.number_input(
+                                "Cost per Skier ($)",
                                 min_value=0.0,
-                                value=_safe_float(selected_trip_row.get("CabinCost"), default=0.0, min_val=0.0),
-                                step=50.0
+                                max_value=5000.0,
+                                value=float(cost_per_skier),
+                                step=5.0,
+                                help="The flat fee charged to each athlete for this trip.",
+                                key=f"edit_cps_{selected_trip_id}"
                             )
-                        with b2:
-                            edit_food = st.number_input(
-                                "Food & Drink Cost ($)",
-                                min_value=0.0,
-                                value=_safe_float(selected_trip_row.get("FoodAlcoholCost"), default=0.0, min_val=0.0),
-                                step=50.0
+                        with e_p2:
+                            edit_projected_total = float(round(edit_att * edit_cps, 2))
+                            st.metric(
+                                label="Total Projected Outflow",
+                                value=f"${edit_projected_total:,.2f}",
+                                delta=f"{edit_att} attendees x ${edit_cps:,.2f}"
                             )
-                        with b3:
-                            edit_tickets = st.number_input(
-                                "Lift Tickets Cost ($)",
-                                min_value=0.0,
-                                value=_safe_float(selected_trip_row.get("LiftTicketsCost"), default=0.0, min_val=0.0),
-                                step=50.0
-                            )
-                        with b4:
-                            edit_gas = st.number_input(
-                                "Estimated Gas Cost ($)",
-                                min_value=0.0,
-                                value=_safe_float(selected_trip_row.get("GasCost"), default=0.0, min_val=0.0),
-                                step=25.0
-                            )
-
-                        st.markdown("###### School Funding & Subsidies")
-                        sf1, sf2 = st.columns([1, 2])
-                        with sf1:
-                            edit_funding = st.number_input(
-                                "School Funding / Subsidy ($)",
-                                min_value=0.0,
-                                value=_safe_float(selected_trip_row.get("SchoolFunding"), default=0.0, min_val=0.0),
-                                step=50.0
-                            )
-                        with sf2:
-                            cov_raw = selected_trip_row.get("SchoolCoverageDetails", "")
-                            cov_str = "" if pd.isna(cov_raw) or str(cov_raw).strip().lower() in ["nan", "none"] else str(cov_raw).strip()
-                            edit_cov = st.text_input("School Coverage Details", value=cov_str)
 
                         notes_raw = selected_trip_row.get("Notes", "")
                         notes_str = "" if pd.isna(notes_raw) or str(notes_raw).strip().lower() in ["nan", "none"] else str(notes_raw).strip()
                         edit_notes = st.text_input("Internal Trip Notes", value=notes_str)
 
-                        # Live pricing preview calculations
-                        edit_gross = float(edit_cabin + edit_food + edit_tickets + edit_gas)
-                        edit_net = max(0.0, float(edit_gross - edit_funding))
-                        edit_per_skier = edit_net / max(1, edit_att)
-
-                        st.caption(
-                            f"Total Gross Outflow: **\\${edit_gross:,.2f}** &bull; "
-                            f"Net Team Cost: **\\${edit_net:,.2f}** &bull; "
-                            f"**Calculated Cost Per Skier: \\${edit_per_skier:,.2f}**"
-                        )
-
-                        submit_edit_trip = st.form_submit_button("Save Trip Details & Pricing Breakdown", type="primary", width="stretch")
+                        submit_edit_trip = st.form_submit_button("Save Trip Details & Cost per Skier", type="primary", width="stretch")
                         if submit_edit_trip:
                             ok, msg = update_trip_details(
                                 trip_id=selected_trip_id,
@@ -961,18 +880,19 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 miles=edit_miles,
                                 attendees=edit_att,
                                 vehicles=edit_veh,
-                                cabin=edit_cabin,
-                                food=edit_food,
-                                tickets=edit_tickets,
-                                gas=edit_gas,
-                                total_cost=edit_gross,
-                                school_funding=edit_funding,
-                                net_cost=edit_net,
-                                school_coverage_details=edit_cov,
+                                cost_per_skier=edit_cps,
+                                total_cost=edit_projected_total,
+                                net_cost=edit_projected_total,
                                 status=edit_status,
                                 notes=edit_notes,
                                 is_officer=is_officer
                             )
+                            if ok:
+                                st.session_state["op_sel_trip"] = f"{edit_name.strip()} ({edit_final_dest})"
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
                             if ok:
                                 st.session_state["op_sel_trip"] = f"{edit_name.strip()} ({edit_final_dest})"
                                 st.success(msg)
@@ -1503,40 +1423,17 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             st.divider()
             c_card1, c_card_stat, c_card2 = st.columns([2.5, 1.2, 0.9])
             with c_card1:
-                st.markdown(f"#### {selected_trip_row['Name']} &bull; Details & Budget")
+                st.markdown(f"#### {selected_trip_row['Name']} &bull; Details & Pricing")
                 st.markdown(
                     f"**Destination:** {selected_trip_row.get('Destination', '')} &bull; "
                     f"**Type:** `{selected_trip_row.get('TripType', 'Recreational')}` &bull; "
                     f"**Dates:** {selected_trip_row.get('StartDate', '')} to {selected_trip_row.get('EndDate', '')} ({_safe_int(selected_trip_row.get('Nights'), default=0, min_val=0)} nights)"
                 )
-                cabin_c = _safe_float(selected_trip_row.get('CabinCost'), default=0.0, min_val=0.0)
-                food_c = _safe_float(selected_trip_row.get('FoodAlcoholCost'), default=0.0, min_val=0.0)
-                gas_c = _safe_float(selected_trip_row.get('GasCost'), default=0.0, min_val=0.0)
-                tickets_c = _safe_float(selected_trip_row.get('LiftTicketsCost'), default=0.0, min_val=0.0)
-                total_c = _safe_float(selected_trip_row.get('TotalCost'), default=0.0, min_val=0.0)
-                funding_c = _safe_float(selected_trip_row.get('SchoolFunding'), default=0.0, min_val=0.0)
-                net_c = _safe_float(selected_trip_row.get('NetCost'), default=max(0.0, total_c - funding_c), min_val=0.0)
-                cov_raw = selected_trip_row.get('SchoolCoverageDetails', '')
-                cov_det = "" if pd.isna(cov_raw) or str(cov_raw).strip().lower() in ['nan', 'none'] else str(cov_raw).strip()
-
-                budget_parts = [
-                    f"Cabin \\${cabin_c:,.0f}",
-                    f"Food & Drink \\${food_c:,.0f}"
-                ]
-                if gas_c > 0:
-                    budget_parts.append(f"Gas \\${gas_c:,.0f}")
-                if tickets_c > 0:
-                    budget_parts.append(f"Tickets \\${tickets_c:,.0f}")
-                if funding_c > 0:
-                    budget_parts.append(f"Gross \\${total_c:,.0f}")
-                    budget_parts.append(f"School Subsidy -\\${funding_c:,.0f}")
-                    budget_parts.append(f"Net Team Cost \\${net_c:,.0f} (~\\${approx_ticket_price:,.0f} / competitor)")
-                else:
-                    budget_parts.append(f"Total \\${total_c:,.0f} (~\\${approx_ticket_price:,.0f} / skier)")
-
-                st.caption("Budget: " + " | ".join(budget_parts))
-                if funding_c > 0 and cov_det:
-                    st.caption(f"*School Coverage Items: {cov_det}*")
+                cps_val = _safe_float(selected_trip_row.get("CostPerSkier"), default=0.0, min_val=0.0)
+                if cps_val <= 0:
+                    cps_val = approx_ticket_price
+                tot_outflow = round(cps_val * target_attendees, 2)
+                st.caption(f"Pricing: **\\${cps_val:,.2f} / skier** &bull; Expected Total Outflow: **\\${tot_outflow:,.2f}** ({target_attendees} attendees)")
             with c_card_stat:
                 st.write("")
                 curr_op_stat = str(selected_trip_row.get("Status", "Planning")).strip()
