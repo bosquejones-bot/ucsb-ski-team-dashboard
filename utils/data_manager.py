@@ -460,6 +460,13 @@ def write_gsheet_worksheet(spreadsheet_url: str, worksheet, df: pd.DataFrame) ->
             except Exception as e_gs:
                 print(f"Direct gspread fallback failed: {e_gs}")
 
+        if written:
+            try:
+                import streamlit as st
+                st.cache_data.clear()
+            except Exception:
+                pass
+
         return written
     except Exception as e:
         print(f"GSheets write failed for worksheet '{worksheet}' on {spreadsheet_url}: {e}")
@@ -1257,7 +1264,7 @@ def load_ledger(season: str = None, is_officer: bool = False) -> pd.DataFrame:
         if sheet_url:
             gs_df = read_gsheet_worksheet(sheet_url, "Ledger", ttl=60)
             if gs_df is None or gs_df.empty or "Amount" not in gs_df.columns:
-                gs_df = read_gsheet_worksheet(sheet_url, 0, ttl=60)
+                gs_df = read_gsheet_worksheet(sheet_url, "ucsb_ski_team_master_ledger_all_seasons_20260918", ttl=60)
             if gs_df is not None and not gs_df.empty and "Amount" in gs_df.columns:
                 try:
                     cols = ["Date", "Entity", "Amount", "Category", "Notes", "Type", "Season", "LoggedBy"]
@@ -1307,7 +1314,12 @@ def save_ledger(df: pd.DataFrame, is_officer: bool = False):
     if sheet_url:
         ok = write_gsheet_worksheet(sheet_url, "Ledger", save_df)
         if not ok:
-            write_gsheet_worksheet(sheet_url, 0, save_df)
+            write_gsheet_worksheet(sheet_url, "ucsb_ski_team_master_ledger_all_seasons_20260918", save_df)
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
 def save_edited_ledger(edited_df: pd.DataFrame, is_officer: bool = False) -> bool:
@@ -1344,6 +1356,11 @@ def save_edited_ledger(edited_df: pd.DataFrame, is_officer: bool = False) -> boo
                     full_df.at[idx, "LoggedBy"] = str(row["LoggedBy"]).strip() if pd.notna(row["LoggedBy"]) else ""
 
         save_ledger(full_df, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"Error saving edited ledger: {e}")
@@ -1674,6 +1691,11 @@ def save_members(df: pd.DataFrame, is_officer: bool = False):
     sheet_url = getattr(config, "MEMBERS_SHEET_URL", "") or DEFAULT_MEMBERSHIP_FORM_SHEET_URL
     if sheet_url:
         write_gsheet_worksheet(sheet_url, "Members", clean_df)
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
 def record_dues_payment_in_ledger(member_name: str, season: str = CURRENT_SEASON, notes: str = None, is_officer: bool = False) -> bool:
@@ -2268,11 +2290,6 @@ def remove_trip_from_member_roster_and_signups(athlete_name: str, trip_name: str
                     new_r = [n for n in r_names if n.lower() != clean_name.lower()]
                     if len(new_r) != len(r_names):
                         trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(new_r)
-                        if "Attendees" in trips_df.columns:
-                            try:
-                                trips_df.at[t_idx, "Attendees"] = max(0, len(new_r))
-                            except Exception:
-                                pass
                         trips_changed = True
             if trips_changed:
                 save_trips(trips_df, is_officer=is_officer)
@@ -2308,11 +2325,6 @@ def add_trip_to_member_roster(athlete_name: str, trip_name: str, season: str = N
                 if not any(n.lower() == clean_name.lower() for n in r_names):
                     r_names.append(clean_name.title())
                     trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(r_names)
-                    if "Attendees" in trips_df.columns:
-                        try:
-                            trips_df.at[t_idx, "Attendees"] = max(len(r_names), int(trips_df.loc[t_idx, "Attendees"]))
-                        except Exception:
-                            pass
                     trips_changed = True
             if trips_changed:
                 save_trips(trips_df, is_officer=is_officer)
@@ -2727,6 +2739,12 @@ def save_trips(df: pd.DataFrame, is_officer: bool = False):
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
     if sheet_url:
         write_gsheet_worksheet(sheet_url, "Trips", save_df)
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+        st.session_state["_session_trips_all"] = save_df.copy()
+    except Exception:
+        pass
 
 
 def add_created_trip(name: str, destination: str, trip_type: str, start_date: str, end_date: str,
@@ -3350,6 +3368,12 @@ def save_trip_signups(df: pd.DataFrame, is_officer: bool = False):
     sheet_url = getattr(config, "TRIPS_EVENTS_SHEET_URL", "") or TRIPS_EVENTS_SHEET_URL
     if sheet_url:
         write_gsheet_worksheet(sheet_url, "Signups", save_df)
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+        st.session_state["_session_signups_all"] = save_df.copy()
+    except Exception:
+        pass
 
 
 def record_trip_payment_in_ledger(athlete_name: str, trip_name: str, trip_id: str = None,
@@ -3555,6 +3579,7 @@ def save_edited_trip_signups(edited_df: pd.DataFrame, trip_id: str, is_officer: 
         save_trip_signups(full_df, is_officer=is_officer)
         try:
             import streamlit as st
+            st.cache_data.clear()
             st.session_state["_session_signups_all"] = full_df.copy()
             if trip_id:
                 st.session_state[f"_session_signups_{trip_id}"] = full_df[full_df["TripID"] == trip_id].copy()
@@ -3632,6 +3657,7 @@ def update_trip_attendee(trip_id: str, signup_id: str, name: str = None,
         save_trip_signups(all_signups, is_officer=is_officer)
         try:
             import streamlit as st
+            st.cache_data.clear()
             st.session_state["_session_signups_all"] = all_signups.copy()
             if trip_id:
                 st.session_state[f"_session_signups_{trip_id}"] = all_signups[all_signups["TripID"] == trip_id].copy()
@@ -3785,12 +3811,6 @@ def parse_and_sync_trip_form_df(df_form: pd.DataFrame, trip_id: str, trip_name: 
                     if s_clean and not any(n.lower() == s_clean.lower() for n in r_names):
                         r_names.append(s_clean)
                 trips_df.loc[t_idx, "AttendeeRoster"] = ", ".join(r_names)
-                if "Attendees" in trips_df.columns:
-                    try:
-                        if len(r_names) > int(trips_df.loc[t_idx, "Attendees"]):
-                            trips_df.loc[t_idx, "Attendees"] = len(r_names)
-                    except Exception:
-                        pass
                 save_trips(trips_df, is_officer=is_officer)
 
         msg = f"Synced {trip_name} Sign-Ups: {added_count} new skier(s) registered, {updated_count} response(s) updated."
@@ -3895,6 +3915,14 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
         }])
         all_signups = pd.concat([all_signups, new_row], ignore_index=True)
         save_trip_signups(all_signups, is_officer=is_officer)
+        try:
+            import streamlit as st
+            st.cache_data.clear()
+            st.session_state["_session_signups_all"] = all_signups.copy()
+            if trip_id:
+                st.session_state[f"_session_signups_{trip_id}"] = all_signups[all_signups["TripID"] == trip_id].copy()
+        except Exception:
+            pass
 
         # Update AttendeeRoster and attendee count in trips file if the trip exists
         trips_df = load_trips(season=None, is_officer=is_officer)
@@ -3909,12 +3937,6 @@ def add_trip_attendee(trip_id: str, trip_name: str, name: str, phone: str,
                 if not any(n.lower() == clean_name.lower() for n in r_names):
                     r_names.append(clean_name)
                     trips_df.loc[t_idx, "AttendeeRoster"] = ", ".join(r_names)
-                    if "Attendees" in trips_df.columns:
-                        try:
-                            if len(r_names) > int(trips_df.loc[t_idx, "Attendees"]):
-                                trips_df.loc[t_idx, "Attendees"] = len(r_names)
-                        except Exception:
-                            pass
                     save_trips(trips_df, is_officer=is_officer)
 
         # Synchronize trip to member's TripsAttended history in members file
@@ -3999,6 +4021,14 @@ def delete_multiple_trip_attendees(signup_ids: list, trip_id: str = None, trip_n
             if matched_signups_mask.any():
                 remaining_signups = all_signups[~matched_signups_mask].copy().reset_index(drop=True)
                 save_trip_signups(remaining_signups, is_officer=is_officer)
+                try:
+                    import streamlit as st
+                    st.cache_data.clear()
+                    st.session_state["_session_signups_all"] = remaining_signups.copy()
+                    if trip_id:
+                        st.session_state[f"_session_signups_{trip_id}"] = remaining_signups[remaining_signups["TripID"] == trip_id].copy()
+                except Exception:
+                    pass
 
         if trip_name:
             affected_trips.add(str(trip_name).strip().lower())
@@ -4018,11 +4048,6 @@ def delete_multiple_trip_attendees(signup_ids: list, trip_id: str = None, trip_n
                         new_r = [n for n in r_names if n.lower() not in target_names]
                         if len(new_r) != len(r_names):
                             trips_df.at[t_idx, "AttendeeRoster"] = ", ".join(new_r)
-                            if "Attendees" in trips_df.columns:
-                                try:
-                                    trips_df.at[t_idx, "Attendees"] = max(0, len(new_r))
-                                except Exception:
-                                    pass
                             trips_changed = True
             if trips_changed:
                 save_trips(trips_df, is_officer=is_officer)
