@@ -215,6 +215,12 @@ def write_gsheet_worksheet(spreadsheet_url: str, worksheet, df: pd.DataFrame) ->
     """Write DataFrame back to a specific worksheet in Google Sheets, invalidating read cache."""
     if not spreadsheet_url or df is None:
         return False
+
+    # Critical Safeguard: If writing to Signups, Trips, or Members and dataframe is empty, abort to protect existing data
+    ws_str = str(worksheet).lower()
+    if ws_str in ["signups", "trips", "members"] and df.empty:
+        print(f"WARNING: Prevented clearing Google Sheet worksheet '{worksheet}' with empty DataFrame.")
+        return False
     conn = get_gsheets_connection()
     if conn is None:
         return False
@@ -2984,6 +2990,11 @@ def save_trip_signups(df: pd.DataFrame, is_officer: bool = False):
     save_df = df[save_cols].copy() if save_cols else df.copy()
     if not is_officer:
         save_df.to_csv(DEMO_TRIP_SIGNUPS_FILE, index=False)
+        return
+
+    # Critical Safeguard: Never overwrite Google Sheets or production CSV with an empty signups dataframe
+    if save_df.empty:
+        print("WARNING: Attempted to save empty trip signups dataframe. Aborting save to protect database integrity.")
         return
 
     save_df.to_csv(TRIP_SIGNUPS_FILE, index=False)

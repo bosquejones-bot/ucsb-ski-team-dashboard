@@ -1256,73 +1256,70 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
 
                     trip_editor_reset_key = f"reset_trip_signups_{selected_trip_id}"
                     trip_editor_ver = st.session_state.get(trip_editor_reset_key, 0)
-                    edited_signups_result = st.data_editor(
-                        editor_signups,
-                        column_config={
-                            "Payment Received": st.column_config.CheckboxColumn(
-                                "Payment Received",
-                                help="Check when athlete sends payment via Venmo/Zelle",
-                                default=False
-                            ),
-                            "ID": st.column_config.TextColumn("ID", disabled=True),
-                            "Name": st.column_config.TextColumn("Name", disabled=True),
-                            "Phone": st.column_config.TextColumn("Phone"),
-                            "Driver Capacity & Availability": st.column_config.SelectboxColumn(
-                                "Driver Capacity & Availability",
-                                help="Select driver availability and passenger seats accounting for gear",
-                                options=DEFAULT_TRIP_DRIVER_OPTIONS,
-                                required=True
-                            ),
-                            "Questions or Concerns?": st.column_config.TextColumn(
-                                "Questions or Concerns?",
-                                help="Dietary restrictions, carpool notes, or gear questions",
-                            ),
-                            "Sign-Up Date": st.column_config.TextColumn("Sign-Up Date", disabled=True)
-                        },
-                        disabled=["ID", "Name", "Sign-Up Date"] if (is_officer and can_edit) else True,
-                        hide_index=True,
-                        width="stretch",
-                        height=420,
-                        key=f"editor_trip_signups_{selected_trip_id}_{trip_editor_ver}"
-                    )
 
-                    if is_officer and not can_edit:
-                        st.caption("Officer viewing mode active (read-only). Enable the Editing toggle in the sidebar to edit payments or driver capacities.")
-                    elif not is_officer:
-                        st.caption("Viewing trip roster in read-only mode. Enter the officer password in the sidebar to edit payments or driver capacities.")
+                    with st.form(key=f"form_roster_table_{selected_trip_id}_{trip_editor_ver}", border=False):
+                        edited_signups_result = st.data_editor(
+                            editor_signups,
+                            column_config={
+                                "Payment Received": st.column_config.CheckboxColumn(
+                                    "Payment Received",
+                                    help="Check when athlete sends payment via Venmo/Zelle",
+                                    default=False
+                                ),
+                                "ID": st.column_config.TextColumn("ID", disabled=True),
+                                "Name": st.column_config.TextColumn("Name", disabled=True),
+                                "Phone": st.column_config.TextColumn("Phone"),
+                                "Driver Capacity & Availability": st.column_config.SelectboxColumn(
+                                    "Driver Capacity & Availability",
+                                    help="Select driver availability and passenger seats accounting for gear",
+                                    options=DEFAULT_TRIP_DRIVER_OPTIONS,
+                                    required=True
+                                ),
+                                "Questions or Concerns?": st.column_config.TextColumn(
+                                    "Questions or Concerns?",
+                                    help="Dietary restrictions, carpool notes, or gear questions",
+                                ),
+                                "Sign-Up Date": st.column_config.TextColumn("Sign-Up Date", disabled=True)
+                            },
+                            disabled=["ID", "Name", "Sign-Up Date"] if (is_officer and can_edit) else True,
+                            hide_index=True,
+                            width="stretch",
+                            height=420,
+                            key=f"editor_trip_signups_{selected_trip_id}_{trip_editor_ver}"
+                        )
 
-                    # Explicit Save Changes bar for in-table edits (Option 1 Batch Save)
-                    if is_officer and can_edit:
-                        has_signup_changes = not edited_signups_result.equals(editor_signups)
-                        if has_signup_changes:
-                            num_signup_changed = int((edited_signups_result.fillna("") != editor_signups.fillna("")).any(axis=1).sum())
-                            row_lbl = "attendee" if num_signup_changed == 1 else "attendees"
-                            st.warning(f"You have unsaved changes ({num_signup_changed} {row_lbl} modified). Click Save All Changes to commit to Google Sheets and local database.")
+                        if is_officer and not can_edit:
+                            st.caption("Officer viewing mode active (read-only). Enable the Editing toggle in the sidebar to edit payments or driver capacities.")
+                        elif not is_officer:
+                            st.caption("Viewing trip roster in read-only mode. Enter the officer password in the sidebar to edit payments or driver capacities.")
 
-                            c_save_s, c_disc_s, _ = st.columns([1.8, 1.2, 4.0])
-                            with c_save_s:
-                                if st.button(
-                                    f"Save All Changes ({num_signup_changed})",
-                                    type="primary",
-                                    key=f"btn_save_signups_{selected_trip_id}",
-                                    width="stretch"
-                                ):
-                                    with st.spinner("Saving attendee updates and payments to Google Sheets..."):
-                                        if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
-                                            st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
-                                            st.success("Attendee updates and payment status saved directly to database.")
-                                            st.rerun()
-                                        else:
-                                            st.error("Failed to save changes to Google Sheets. Please try again.")
-                            with c_disc_s:
-                                if st.button(
-                                    "Discard",
-                                    key=f"btn_discard_signups_{selected_trip_id}",
-                                    width="stretch",
-                                    help="Discard unsaved edits and reload original data"
-                                ):
-                                    st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
-                                    st.rerun()
+                        c_save_s, c_disc_s, _ = st.columns([2.2, 1.2, 3.6])
+                        with c_save_s:
+                            submit_roster_save = st.form_submit_button(
+                                "Save All Roster & Driver Changes",
+                                type="primary",
+                                disabled=not (is_officer and can_edit),
+                                width="stretch"
+                            )
+                        with c_disc_s:
+                            submit_roster_reload = st.form_submit_button(
+                                "Reload Original",
+                                width="stretch",
+                                help="Discard any unsaved table edits and reload original data"
+                            )
+
+                    if submit_roster_reload:
+                        st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                        st.rerun()
+
+                    if submit_roster_save:
+                        with st.spinner("Saving attendee updates and payments to Google Sheets..."):
+                            if save_edited_trip_signups(edited_signups_result, selected_trip_id, is_officer=is_officer):
+                                st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                st.success("Attendee updates and payment status saved directly to Google Sheets and database.")
+                                st.rerun()
+                            else:
+                                st.error("Failed to save changes to Google Sheets. Please try again.")
 
                 # Action Bar: Quick Edit Attendee, CSV Export, Driver Sheet Script Popover & Multi-Attendee Removal
                 c_qe, c_exp, c_drv, c_rem = st.columns([1.8, 1.8, 1.6, 1.2])
@@ -1354,45 +1351,47 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                     curr_d_val = matched_opt
                                 curr_d_idx = DEFAULT_TRIP_DRIVER_OPTIONS.index(curr_d_val) if curr_d_val in DEFAULT_TRIP_DRIVER_OPTIONS else 0
 
-                                qe_driver = st.selectbox(
-                                    "Driver Capacity & Availability",
-                                    options=DEFAULT_TRIP_DRIVER_OPTIONS,
-                                    index=curr_d_idx,
-                                    key=f"qe_drv_{selected_trip_id}_{qe_row.get('SignupID')}"
-                                )
-                                qe_paid = st.checkbox(
-                                    "Payment Received",
-                                    value=_is_truthy(qe_row.get("PaymentReceived")),
-                                    key=f"qe_pay_{selected_trip_id}_{qe_row.get('SignupID')}"
-                                )
-                                qe_phone = st.text_input(
-                                    "Phone Number",
-                                    value=str(qe_row.get("Phone", "")) if pd.notnull(qe_row.get("Phone")) and str(qe_row.get("Phone", "")).lower() != "nan" else "",
-                                    key=f"qe_ph_{selected_trip_id}_{qe_row.get('SignupID')}"
-                                )
-                                qe_notes = st.text_input(
-                                    "Questions or Concerns?",
-                                    value=str(qe_row.get("Questions", "")) if pd.notnull(qe_row.get("Questions")) and str(qe_row.get("Questions", "")).lower() != "nan" else "",
-                                    key=f"qe_q_{selected_trip_id}_{qe_row.get('SignupID')}"
-                                )
-                                if st.button(f"Save Updates for {qe_row.get('Name')}", type="primary", key=f"btn_qe_save_{selected_trip_id}", width="stretch"):
-                                    with st.spinner("Saving updates to Google Sheets and database..."):
-                                        ok, msg = update_trip_attendee(
-                                            trip_id=selected_trip_id,
-                                            signup_id=qe_row.get("SignupID"),
-                                            name=qe_row.get("Name"),
-                                            driving_capacity=qe_driver,
-                                            payment_received=qe_paid,
-                                            phone=qe_phone,
-                                            questions=qe_notes,
-                                            is_officer=is_officer
-                                        )
-                                        if ok:
-                                            st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
-                                            st.success(f"Updated '{qe_row.get('Name')}' successfully.")
-                                            st.rerun()
-                                        else:
-                                            st.error(msg)
+                                with st.form(key=f"form_qe_{selected_trip_id}_{qe_row.get('SignupID')}", border=False):
+                                    qe_driver = st.selectbox(
+                                        "Driver Capacity & Availability",
+                                        options=DEFAULT_TRIP_DRIVER_OPTIONS,
+                                        index=curr_d_idx
+                                    )
+                                    qe_paid = st.checkbox(
+                                        "Payment Received",
+                                        value=_is_truthy(qe_row.get("PaymentReceived"))
+                                    )
+                                    qe_phone = st.text_input(
+                                        "Phone Number",
+                                        value=str(qe_row.get("Phone", "")) if pd.notnull(qe_row.get("Phone")) and str(qe_row.get("Phone", "")).lower() != "nan" else ""
+                                    )
+                                    qe_notes = st.text_input(
+                                        "Questions or Concerns?",
+                                        value=str(qe_row.get("Questions", "")) if pd.notnull(qe_row.get("Questions")) and str(qe_row.get("Questions", "")).lower() != "nan" else ""
+                                    )
+                                    submit_qe = st.form_submit_button(
+                                        f"Save Updates for {qe_row.get('Name')}",
+                                        type="primary",
+                                        width="stretch"
+                                    )
+                                    if submit_qe:
+                                        with st.spinner("Saving updates to Google Sheets and database..."):
+                                            ok, msg = update_trip_attendee(
+                                                trip_id=selected_trip_id,
+                                                signup_id=qe_row.get("SignupID"),
+                                                name=qe_row.get("Name"),
+                                                driving_capacity=qe_driver,
+                                                payment_received=qe_paid,
+                                                phone=qe_phone,
+                                                questions=qe_notes,
+                                                is_officer=is_officer
+                                            )
+                                            if ok:
+                                                st.session_state[trip_editor_reset_key] = trip_editor_ver + 1
+                                                st.success(f"Updated '{qe_row.get('Name')}' successfully.")
+                                                st.rerun()
+                                            else:
+                                                st.error(msg)
                 with c_exp:
                     csv_signups = filtered_signups.to_csv(index=False).encode('utf-8')
                     st.download_button(
