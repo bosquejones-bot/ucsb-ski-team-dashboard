@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from utils.data_manager import (
     load_trips, load_members, add_created_trip, delete_trip,
     load_trip_signups, save_edited_trip_signups, update_trip_attendee,
@@ -23,6 +23,60 @@ from config import (
     DEFAULT_SEATS_PER_CAR, CURRENT_SEASON, THEME_COLORS,
     DEFAULT_TRIP_DRIVER_OPTIONS
 )
+
+
+def _parse_trip_date_safe(val):
+    """Safely parse a date string into a datetime.date object."""
+    if not val or str(val).strip().lower() in ["nan", "none", "", "null", "0", "0.0"]:
+        return None
+    s = str(val).strip()
+    for fmt in ["%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y", "%Y/%m/%d"]:
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except Exception:
+            pass
+    return None
+
+
+def _find_default_trip_label(trips_df: pd.DataFrame, trip_choice_keys: list) -> str:
+    """Find the label of the first upcoming trip, or fallback to the first trip in the list."""
+    if not trip_choice_keys:
+        return ""
+    if trips_df.empty:
+        return trip_choice_keys[0]
+
+    today = date.today()
+    candidates = []
+
+    for idx, r in trips_df.iterrows():
+        label = f"{r['Name']} ({r['Destination']})"
+        if label not in trip_choice_keys:
+            continue
+
+        status = str(r.get("Status", "")).strip().lower()
+        if status in ["completed", "cancelled"]:
+            continue
+
+        s_d = _parse_trip_date_safe(r.get("StartDate"))
+        e_d = _parse_trip_date_safe(r.get("EndDate"))
+
+        # Upcoming criteria:
+        # 1. End date is today or later (ongoing or future trip)
+        # 2. Or start date is today or later
+        # 3. If dates are missing, but status is active/planning, treat as future
+        if e_d and e_d >= today:
+            sort_date = s_d if (s_d and s_d >= today) else e_d
+            candidates.append((sort_date, idx, label))
+        elif s_d and s_d >= today:
+            candidates.append((s_d, idx, label))
+        elif not s_d and not e_d and status in ["planning", "confirmed"]:
+            candidates.append((date.max, idx, label))
+
+    if candidates:
+        candidates.sort(key=lambda x: (x[0], x[1]))
+        return candidates[0][2]
+
+    return trip_choice_keys[0]
 
 
 def extract_driver_capacity(driving_val) -> int:
@@ -674,11 +728,21 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
             trip_choice_map = {f"{r['Name']} ({r['Destination']})": r["TripID"] for _, r in trips_df.iterrows()}
             trip_choice_keys = list(trip_choice_map.keys())
 
-            # Validate op_sel_trip in session state
-            if "op_sel_trip" in st.session_state and st.session_state["op_sel_trip"] not in trip_choice_keys:
-                st.session_state["op_sel_trip"] = trip_choice_keys[0] if trip_choice_keys else ""
+            # Find default trip: first upcoming trip (or first in list if none upcoming)
+            default_trip_label = _find_default_trip_label(trips_df, trip_choice_keys)
 
-            selected_trip_label = st.selectbox("Select Trip to Manage", trip_choice_keys, key="op_sel_trip")
+            # Reset default when viewing season changes
+            season_track_key = "_last_trip_ops_season"
+            if st.session_state.get(season_track_key) != selected_season:
+                st.session_state[season_track_key] = selected_season
+                st.session_state["op_sel_trip"] = default_trip_label
+
+            # Validate op_sel_trip in session state
+            if "op_sel_trip" not in st.session_state or st.session_state["op_sel_trip"] not in trip_choice_keys:
+                st.session_state["op_sel_trip"] = default_trip_label
+
+            default_idx = trip_choice_keys.index(st.session_state["op_sel_trip"]) if st.session_state["op_sel_trip"] in trip_choice_keys else 0
+            selected_trip_label = st.selectbox("Select Trip to Manage", trip_choice_keys, index=default_idx, key="op_sel_trip")
             selected_trip_id = trip_choice_map[selected_trip_label]
             selected_trip_row = trips_df[trips_df["TripID"] == selected_trip_id].iloc[0]
 
@@ -887,12 +951,6 @@ def render_trip_creator_tab(selected_season: str = CURRENT_SEASON, is_officer: b
                                 notes=edit_notes,
                                 is_officer=is_officer
                             )
-                            if ok:
-                                st.session_state["op_sel_trip"] = f"{edit_name.strip()} ({edit_final_dest})"
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
                             if ok:
                                 st.session_state["op_sel_trip"] = f"{edit_name.strip()} ({edit_final_dest})"
                                 st.success(msg)

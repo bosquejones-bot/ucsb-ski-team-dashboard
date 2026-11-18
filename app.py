@@ -13,6 +13,7 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+import functools
 import streamlit as st
 import streamlit.components.v1 as components
 from streamlit.delta_generator import DeltaGenerator
@@ -25,43 +26,39 @@ def _is_searchable_member_arg(*args, **kwargs):
 
 # Globally remove typing/search filter from all selectbox and multiselect dropdown menus,
 # EXCEPT for the Select Active Member (Searchable) dropdown in Trip Creator.
-_orig_dg_sb = DeltaGenerator.selectbox
-def _patched_dg_sb(self, *args, **kwargs):
-    if "filter_mode" not in kwargs:
-        if _is_searchable_member_arg(*args, **kwargs):
+# Save unpatched originals once to prevent recursive wrapping across Streamlit script reruns.
+if not hasattr(DeltaGenerator, "_orig_unpatched_selectbox"):
+    DeltaGenerator._orig_unpatched_selectbox = DeltaGenerator.selectbox
+
+    @functools.wraps(DeltaGenerator._orig_unpatched_selectbox)
+    def _patched_dg_sb(self, *args, **kwargs):
+        if "filter_mode" not in kwargs:
+            if _is_searchable_member_arg(*args, **kwargs):
+                kwargs["filter_mode"] = "fuzzy"
+            else:
+                kwargs["filter_mode"] = None
+        elif _is_searchable_member_arg(*args, **kwargs) and kwargs.get("filter_mode") is None:
             kwargs["filter_mode"] = "fuzzy"
-        else:
+        return DeltaGenerator._orig_unpatched_selectbox(self, *args, **kwargs)
+
+    DeltaGenerator.selectbox = _patched_dg_sb
+    st.selectbox = functools.wraps(DeltaGenerator._orig_unpatched_selectbox)(
+        lambda *args, **kwargs: _patched_dg_sb(st._main, *args, **kwargs)
+    )
+
+if not hasattr(DeltaGenerator, "_orig_unpatched_multiselect"):
+    DeltaGenerator._orig_unpatched_multiselect = DeltaGenerator.multiselect
+
+    @functools.wraps(DeltaGenerator._orig_unpatched_multiselect)
+    def _patched_dg_ms(self, *args, **kwargs):
+        if "filter_mode" not in kwargs:
             kwargs["filter_mode"] = None
-    elif _is_searchable_member_arg(*args, **kwargs) and kwargs.get("filter_mode") is None:
-        kwargs["filter_mode"] = "fuzzy"
-    return _orig_dg_sb(self, *args, **kwargs)
-DeltaGenerator.selectbox = _patched_dg_sb
+        return DeltaGenerator._orig_unpatched_multiselect(self, *args, **kwargs)
 
-_orig_st_sb = st.selectbox
-def _patched_st_sb(*args, **kwargs):
-    if "filter_mode" not in kwargs:
-        if _is_searchable_member_arg(*args, **kwargs):
-            kwargs["filter_mode"] = "fuzzy"
-        else:
-            kwargs["filter_mode"] = None
-    elif _is_searchable_member_arg(*args, **kwargs) and kwargs.get("filter_mode") is None:
-        kwargs["filter_mode"] = "fuzzy"
-    return _orig_st_sb(*args, **kwargs)
-st.selectbox = _patched_st_sb
-
-_orig_dg_ms = DeltaGenerator.multiselect
-def _patched_dg_ms(self, *args, **kwargs):
-    if "filter_mode" not in kwargs:
-        kwargs["filter_mode"] = None
-    return _orig_dg_ms(self, *args, **kwargs)
-DeltaGenerator.multiselect = _patched_dg_ms
-
-_orig_st_ms = st.multiselect
-def _patched_st_ms(*args, **kwargs):
-    if "filter_mode" not in kwargs:
-        kwargs["filter_mode"] = None
-    return _orig_st_ms(*args, **kwargs)
-st.multiselect = _patched_st_ms
+    DeltaGenerator.multiselect = _patched_dg_ms
+    st.multiselect = functools.wraps(DeltaGenerator._orig_unpatched_multiselect)(
+        lambda *args, **kwargs: _patched_dg_ms(st._main, *args, **kwargs)
+    )
 
 # Auto-detect if files were uploaded inside a subfolder (e.g., "Ski Team Dash")
 if not os.path.exists(os.path.join(ROOT_DIR, "utils", "data_manager.py")):
